@@ -44,6 +44,22 @@ Application::Application() : notify_player_(audio_service_) {
                                                 .name = "clock_timer",
                                                 .skip_unhandled_events = true};
     esp_timer_create(&clock_timer_args, &clock_timer_handle_);
+
+    // 25 Hz push of the smoothed mic level to the display for the visualizer.
+    esp_timer_create_args_t mic_viz_timer_args = {
+        .callback =
+            [](void* arg) {
+                Application* app = (Application*)arg;
+                auto display = Board::GetInstance().GetDisplay();
+                if (display != nullptr) {
+                    display->SetMicLevel(app->audio_service_.GetMicLevel());
+                }
+            },
+        .arg = this,
+        .dispatch_method = ESP_TIMER_TASK,
+        .name = "mic_viz_timer",
+        .skip_unhandled_events = true};
+    esp_timer_create(&mic_viz_timer_args, &mic_viz_timer_handle_);
 }
 
 Application::~Application() {
@@ -51,6 +67,10 @@ Application::~Application() {
     if (clock_timer_handle_ != nullptr) {
         esp_timer_stop(clock_timer_handle_);
         esp_timer_delete(clock_timer_handle_);
+    }
+    if (mic_viz_timer_handle_ != nullptr) {
+        esp_timer_stop(mic_viz_timer_handle_);
+        esp_timer_delete(mic_viz_timer_handle_);
     }
     vEventGroupDelete(event_group_);
 }
@@ -99,6 +119,11 @@ void Application::Initialize() {
 
     // Start the clock timer to update the status bar
     esp_timer_start_periodic(clock_timer_handle_, 1000000);
+
+    // Start the mic level meter (25 Hz)
+    if (mic_viz_timer_handle_ != nullptr) {
+        esp_timer_start_periodic(mic_viz_timer_handle_, 40000);
+    }
 
     // Add MCP common tools (only once during initialization)
     auto& mcp_server = McpServer::GetInstance();
@@ -673,6 +698,11 @@ void Application::InitializeProtocol() {
                     display->AddTextGlyphs(glyphs, bpp);
                     display->SetChatMessage("user", message.c_str());
                 });
+                if (on_stt_text_) {
+                    Schedule([cb = on_stt_text_, message = std::string(text->valuestring)]() {
+                        cb(message);
+                    });
+                }
             }
         } else if (strcmp(type->valuestring, "llm") == 0) {
             auto emotion = cJSON_GetObjectItem(root, "emotion");
@@ -1026,12 +1056,12 @@ void Application::HandleStateChangedEvent() {
             break;
         case kDeviceStateConnecting:
             display->SetStatus(Lang::Strings::CONNECTING);
-            display->SetEmotion("neutral");
+            display->SetEmotion("thinking");
             display->SetChatMessage("system", "");
             break;
         case kDeviceStateListening:
             display->SetStatus(Lang::Strings::LISTENING);
-            display->SetEmotion("neutral");
+            display->SetEmotion("listening");
 
             // Make sure the audio processor is running
             if (play_popup_on_listening_ || !audio_service_.IsAudioProcessorRunning()) {
@@ -1050,6 +1080,7 @@ void Application::HandleStateChangedEvent() {
             break;
         case kDeviceStateSpeaking:
             display->SetStatus(Lang::Strings::SPEAKING);
+            display->SetEmotion("speaking");
 
             if (listening_mode_ != kListeningModeRealtime) {
                 audio_service_.EnableVoiceProcessing(false);
@@ -1060,6 +1091,7 @@ void Application::HandleStateChangedEvent() {
             break;
         case kDeviceStateNotifying:
             display->SetStatus(Lang::Strings::SPEAKING);
+            display->SetEmotion("speaking");
             audio_service_.EnableVoiceProcessing(false);
             audio_service_.EnableWakeWordDetection(audio_service_.IsAfeWakeWord());
             break;
@@ -1363,6 +1395,14 @@ void Application::SetAecMode(AecMode mode) {
 }
 
 void Application::PlaySound(const std::string_view& sound) { audio_service_.PlaySound(sound); }
+
+void Application::CloseAudioChannel() {
+    Schedule([this]() {
+        if (protocol_ && protocol_->IsAudioChannelOpened()) {
+            protocol_->CloseAudioChannel();
+        }
+    });
+}
 
 void Application::ResetProtocol() {
     Schedule([this]() {

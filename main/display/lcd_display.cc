@@ -16,6 +16,7 @@
 #include <noto_emoji.h>
 #include <src/misc/cache/lv_cache.h>
 #include <algorithm>
+#include <cmath>
 #include <cstring>
 #include <string>
 #include <vector>
@@ -147,7 +148,7 @@ LcdDisplay::LcdDisplay(esp_lcd_panel_io_handle_t panel_io, esp_lcd_panel_handle_
 
     // Load theme from settings
     Settings settings("display", false);
-    std::string theme_name = settings.GetString("theme", "light");
+    std::string theme_name = settings.GetString("theme", "dark");
     current_theme_ = LvglThemeManager::GetInstance().GetTheme(theme_name);
 
     // Create a timer to hide the preview image
@@ -409,6 +410,16 @@ LcdDisplay::~LcdDisplay() {
     if (preview_timer_ != nullptr) {
         esp_timer_stop(preview_timer_);
         esp_timer_delete(preview_timer_);
+    }
+
+    // Drop the mood animation timer before its owning label is deleted
+    if (mood_timer_ != nullptr) {
+        lv_timer_delete(mood_timer_);
+        mood_timer_ = nullptr;
+    }
+    if (mic_viz_timer_ != nullptr) {
+        lv_timer_delete(mic_viz_timer_);
+        mic_viz_timer_ = nullptr;
     }
 
     if (preview_image_ != nullptr) {
@@ -937,10 +948,13 @@ void LcdDisplay::ClearChatMessages() {
     // Reset chat_message_label_ as it has been deleted
     chat_message_label_ = nullptr;
 
-    // Show the centered AI logo (emoji_label_) again
+    // Show the centered AI logo (emoji_label_) again, and give the chat area
+    // its full height back now that no bubbles reserve a mood strip.
     if (emoji_label_ != nullptr) {
+        lv_obj_center(emoji_label_);
         lv_obj_remove_flag(emoji_label_, LV_OBJ_FLAG_HIDDEN);
     }
+    lv_obj_set_style_margin_bottom(content_, 0, 0);
 
     ESP_LOGI(TAG, "Chat messages cleared");
 }
@@ -1361,87 +1375,272 @@ void LcdDisplay::SetEmotion(const char* emotion) {
         ESP_LOGW(TAG, "SetEmotion('%s') called before SetupUI() - emotion will not be displayed!",
                  emotion);
     }
-    if (emoji_image_ == nullptr) {
+    if (emoji_label_ == nullptr) {
         if (setup_ui_called_) {
             ESP_LOGW(TAG,
-                     "SetEmotion('%s') failed: emoji_image_ is nullptr (SetupUI() was called but "
-                     "emoji image not created)",
+                     "SetEmotion('%s') failed: emoji_label_ is nullptr (SetupUI() was called but "
+                     "the mood label was not created)",
                      emotion);
         }
         return;
     }
 
-    auto emoji_collection = static_cast<LvglTheme*>(current_theme_)->emoji_collection();
-    auto image = emoji_collection != nullptr ? emoji_collection->GetEmojiImage(emotion) : nullptr;
-    if (image == nullptr) {
-        auto lvgl_theme = static_cast<LvglTheme*>(current_theme_);
-        const char* utf8 = noto_emoji_get_utf8(emotion);
-        const lv_font_t* emotion_font = lvgl_theme->emoji_font()->font();
-        if (utf8 == nullptr) {
-            utf8 = material_symbols_get_utf8(emotion);
-            emotion_font = lvgl_theme->large_icon_font()->font();
-        }
-        if (utf8 != nullptr && emoji_label_ != nullptr) {
-            DisplayLockGuard lock(this);
-            if (gif_controller_) {
-                gif_controller_->Stop();
-                gif_controller_.reset();
-            }
-            lv_obj_set_style_text_font(emoji_label_, emotion_font, 0);
-            lv_label_set_text(emoji_label_, utf8);
-            lv_obj_add_flag(emoji_image_, LV_OBJ_FLAG_HIDDEN);
-            lv_obj_remove_flag(emoji_label_, LV_OBJ_FLAG_HIDDEN);
-        }
-        return;
-    }
-
+    // Minimal icon-only mood. The emoji image / GIF path is intentionally unused:
+    // one Material Symbols glyph per mood, animated by a cheap LVGL timer.
     DisplayLockGuard lock(this);
-    // Stop any running GIF animation in the same lock scope as setting new image
-    // to prevent LVGL from accessing freed image data between operations
+
+    // Never leave an emoji image or a running GIF on screen.
     if (gif_controller_) {
         gif_controller_->Stop();
         gif_controller_.reset();
     }
-    if (image->IsGif()) {
-        // Create new GIF controller
-        gif_controller_ = std::make_unique<LvglGif>(image->image_dsc());
-
-        if (gif_controller_->IsLoaded()) {
-            // Set up frame update callback
-            gif_controller_->SetFrameCallback(
-                [this]() { lv_image_set_src(emoji_image_, gif_controller_->image_dsc()); });
-
-            // Set initial frame and start animation
-            lv_image_set_src(emoji_image_, gif_controller_->image_dsc());
-            gif_controller_->Start();
-
-            // Show GIF, hide others
-            lv_obj_add_flag(emoji_label_, LV_OBJ_FLAG_HIDDEN);
-            lv_obj_remove_flag(emoji_image_, LV_OBJ_FLAG_HIDDEN);
-        } else {
-            ESP_LOGE(TAG, "Failed to load GIF for emotion: %s", emotion);
-            gif_controller_.reset();
-        }
-    } else {
-        lv_image_set_src(emoji_image_, image->image_dsc());
-        lv_obj_add_flag(emoji_label_, LV_OBJ_FLAG_HIDDEN);
-        lv_obj_remove_flag(emoji_image_, LV_OBJ_FLAG_HIDDEN);
-    }
-
-#if CONFIG_USE_WECHAT_MESSAGE_STYLE
-    // In WeChat message style, if emotion is neutral, don't display it
-    uint32_t child_count = lv_obj_get_child_cnt(content_);
-    if (strcmp(emotion, "neutral") == 0 && child_count > 0) {
-        // Stop GIF animation if running
-        if (gif_controller_) {
-            gif_controller_->Stop();
-            gif_controller_.reset();
-        }
-
+    if (emoji_image_ != nullptr) {
         lv_obj_add_flag(emoji_image_, LV_OBJ_FLAG_HIDDEN);
-        lv_obj_add_flag(emoji_label_, LV_OBJ_FLAG_HIDDEN);
     }
-#endif
+
+    // Keep the mood icon readable while the conversation log is on screen.
+    // With no messages it sits centered (the classic "face"); once bubbles
+    // exist it drops into a strip reserved below the log, so history and the
+    // mood indicator never overlap.
+    auto lvgl_theme = static_cast<LvglTheme*>(current_theme_);
+    bool compact = content_ != nullptr && lvgl_theme != nullptr &&
+                   lvgl_theme->large_icon_font() != nullptr &&
+                   lv_obj_get_child_cnt(content_) > 0;
+    if (compact) {
+        const lv_font_t* mood_font = lvgl_theme->large_icon_font()->font();
+        int strip = lv_font_get_line_height(mood_font) + lvgl_theme->spacing(8);
+        lv_obj_set_style_margin_bottom(content_, strip, 0);
+        lv_obj_align(emoji_label_, LV_ALIGN_BOTTOM_MID, 0, -lvgl_theme->spacing(4));
+    } else {
+        lv_obj_set_style_margin_bottom(content_, 0, 0);
+        lv_obj_center(emoji_label_);
+    }
+
+    UpdateMood(emotion != nullptr ? emotion : "neutral");
+    lv_obj_remove_flag(emoji_label_, LV_OBJ_FLAG_HIDDEN);
+}
+
+void LcdDisplay::UpdateMood(const char* mood) {
+    if (emoji_label_ == nullptr || mood == nullptr) {
+        return;
+    }
+
+    auto lvgl_theme = static_cast<LvglTheme*>(current_theme_);
+    if (lvgl_theme == nullptr || lvgl_theme->large_icon_font() == nullptr) {
+        return;
+    }
+
+    // Map the mood to a glyph and a motion. "thinking" is the animation that
+    // plays while the device waits on the model; "listening" and "speaking" get
+    // gentle breathes; idle breathes slowly; alerts stay still.
+    const char* glyph = MATERIAL_SYMBOLS_ROBOT_2;
+    uint32_t period_ms = 1400;  // slow idle breathe
+    bool bob = false;
+    bool warn = false;
+
+    if (strcmp(mood, "thinking") == 0) {
+        glyph = MATERIAL_SYMBOLS_PROGRESS_ACTIVITY;
+        period_ms = 480;
+        bob = true;
+    } else if (strcmp(mood, "listening") == 0) {
+        glyph = MATERIAL_SYMBOLS_MIC;
+        period_ms = 800;
+    } else if (strcmp(mood, "speaking") == 0) {
+        glyph = MATERIAL_SYMBOLS_CHAT_BUBBLE;
+        period_ms = 600;
+    } else if (strcmp(mood, "sleepy") == 0) {
+        glyph = MATERIAL_SYMBOLS_BRIGHTNESS_6;
+        period_ms = 0;  // dimmed and still
+    } else if (strcmp(mood, "neutral") == 0 || strcmp(mood, "robot_2") == 0) {
+        glyph = MATERIAL_SYMBOLS_ROBOT_2;
+    } else {
+        // Server-sent and alert moods collapse to a single calm warning mark.
+        glyph = MATERIAL_SYMBOLS_WARNING;
+        period_ms = 0;
+        warn = true;
+    }
+
+    lv_obj_set_style_text_font(emoji_label_, lvgl_theme->large_icon_font()->font(), 0);
+    lv_obj_set_style_text_color(emoji_label_, lvgl_theme->text_color(), 0);
+    lv_obj_set_style_opa(emoji_label_, warn ? LV_OPA_70 : LV_OPA_COVER, 0);
+    lv_obj_set_y(emoji_label_, 0);
+    lv_label_set_text(emoji_label_, glyph);
+
+    mood_glyph_ = glyph;
+    mood_period_ms_ = period_ms;
+    mood_bob_ = bob;
+    mood_phase_ = 0;
+
+    // One timer for every animated mood; recreated only when the period changes.
+    if (period_ms == 0) {
+        if (mood_timer_ != nullptr) {
+            lv_timer_delete(mood_timer_);
+            mood_timer_ = nullptr;
+        }
+        return;
+    }
+    if (mood_timer_ != nullptr) {
+        lv_timer_set_period(mood_timer_, period_ms);
+        lv_timer_reset(mood_timer_);
+        return;
+    }
+    mood_timer_ = lv_timer_create(MoodTimerCb, period_ms, this);
+}
+
+void LcdDisplay::MoodTimerCb(lv_timer_t* timer) {
+    auto* self = static_cast<LcdDisplay*>(lv_timer_get_user_data(timer));
+    if (self == nullptr) {
+        return;
+    }
+
+    // Runs on the LVGL task, but take the display lock anyway so the shared
+    // label and style writes stay serialized with SetEmotion/SetTheme.
+    DisplayLockGuard lock(self);
+    if (self->emoji_label_ == nullptr || lv_obj_has_flag(self->emoji_label_, LV_OBJ_FLAG_HIDDEN)) {
+        return;
+    }
+
+    self->mood_phase_ = (self->mood_phase_ + 1) % 2;
+    lv_obj_set_style_opa(self->emoji_label_, self->mood_phase_ ? LV_OPA_40 : LV_OPA_COVER, 0);
+    if (self->mood_bob_) {
+        lv_obj_set_y(self->emoji_label_, self->mood_phase_ ? 3 : 0);
+    }
+}
+
+void LcdDisplay::ScrollChatMessages(int scroll_step_y) {
+    DisplayLockGuard lock(this);
+    if (content_ == nullptr) {
+        return;
+    }
+    lv_obj_scroll_by(content_, 0, scroll_step_y, LV_ANIM_ON);
+}
+
+void LcdDisplay::SetMicLevel(float level) {
+    // Called from the app's 25 Hz timer (not the LVGL task); only snapshot the
+    // target here, the LVGL timer does the actual drawing.
+    if (!mic_viz_enabled_) {
+        return;
+    }
+    if (level < 0.0f) {
+        level = 0.0f;
+    } else if (level > 1.0f) {
+        level = 1.0f;
+    }
+    mic_level_target_ = level;
+    if (mic_viz_timer_ == nullptr) {
+        mic_viz_timer_ = lv_timer_create(MicVizTimerCb, 40, this);
+    } else {
+        lv_timer_resume(mic_viz_timer_);
+    }
+}
+
+void LcdDisplay::SetMicVisualizerEnabled(bool enabled) {
+    mic_viz_enabled_ = enabled;
+    if (!enabled && mic_viz_bar_[0] != nullptr) {
+        DisplayLockGuard lock(this);
+        for (int i = 0; i < kMicVizBars; i++) {
+            if (mic_viz_bar_[i] != nullptr) {
+                lv_obj_add_flag(mic_viz_bar_[i], LV_OBJ_FLAG_HIDDEN);
+            }
+        }
+    }
+}
+
+void LcdDisplay::CreateMicViz() {
+    if (mic_viz_bar_[0] != nullptr) {
+        return;
+    }
+    auto* screen = lv_screen_active();
+    if (screen == nullptr) {
+        return;
+    }
+    auto lvgl_theme = static_cast<LvglTheme*>(current_theme_);
+    if (lvgl_theme == nullptr) {
+        return;
+    }
+
+    // A single row of bars pinned to the bottom edge, inside the strip the
+    // mood icon already reserves: never overlaps the chat bubbles.
+    int total_width = kMicVizBars * kMicVizBarWidth + (kMicVizBars - 1) * kMicVizBarGap;
+    for (int i = 0; i < kMicVizBars; i++) {
+        auto* bar = lv_obj_create(screen);
+        lv_obj_set_size(bar, kMicVizBarWidth, 2);
+        lv_obj_set_style_radius(bar, 1, 0);
+        lv_obj_set_style_bg_opa(bar, LV_OPA_70, 0);
+        lv_obj_set_style_bg_color(bar, lvgl_theme->text_color(), 0);
+        lv_obj_set_style_border_width(bar, 0, 0);
+        lv_obj_set_style_pad_all(bar, 0, 0);
+        lv_obj_clear_flag(bar, LV_OBJ_FLAG_SCROLLABLE);
+        lv_obj_align(bar, LV_ALIGN_BOTTOM_MID, -(total_width / 2) + i * (kMicVizBarWidth + kMicVizBarGap), -lvgl_theme->spacing(3));
+        lv_obj_add_flag(bar, LV_OBJ_FLAG_HIDDEN);
+        mic_viz_bar_[i] = bar;
+    }
+}
+
+void LcdDisplay::UpdateMicViz() {
+    if (mic_viz_bar_[0] == nullptr) {
+        return;
+    }
+
+    // Fast attack, slow decay so it reads like a level meter.
+    float target = mic_level_target_;
+    float diff = target - mic_level_shown_;
+    mic_level_shown_ += (diff > 0 ? 0.5f : 0.12f) * diff;
+    if (mic_level_shown_ < 0.0f) {
+        mic_level_shown_ = 0.0f;
+    }
+
+    bool visible = mic_level_shown_ > 0.02f;
+    if (!visible) {
+        if (!lv_obj_has_flag(mic_viz_bar_[0], LV_OBJ_FLAG_HIDDEN)) {
+            for (int i = 0; i < kMicVizBars; i++) {
+                lv_obj_add_flag(mic_viz_bar_[i], LV_OBJ_FLAG_HIDDEN);
+            }
+            lv_timer_pause(mic_viz_timer_);
+        }
+        return;
+    }
+
+    // Fixed dome so the center bars carry the height, plus a travelling wave
+    // so the meter stays alive even at a constant level.
+    for (int i = 0; i < kMicVizBars; i++) {
+        float mid = (kMicVizBars - 1) / 2.0f;
+        float shape = 0.45f + 0.55f * (1.0f - std::abs(i - mid) / mid);
+        float wave = 0.75f + 0.25f * sinf(0.9f * static_cast<float>(i) + mood_phase_ * 1.7f);
+        int height = static_cast<int>(shape * wave * mic_level_shown_ * kMicVizBarHeight);
+        if (height < 2) {
+            height = 2;
+        }
+        if (height > kMicVizBarHeight) {
+            height = kMicVizBarHeight;
+        }
+        // Bars are bottom-anchored (BOTTOM_MID grip), so raising the height
+        // alone grows them upward from a shared baseline.
+        lv_obj_set_height(mic_viz_bar_[i], height);
+        lv_opa_t opa = static_cast<lv_opa_t>(static_cast<int>(LV_OPA_50) +
+                                             static_cast<int>(45 * mic_level_shown_));
+        lv_obj_set_style_bg_opa(mic_viz_bar_[i], opa, 0);
+        if (lv_obj_has_flag(mic_viz_bar_[i], LV_OBJ_FLAG_HIDDEN)) {
+            lv_obj_remove_flag(mic_viz_bar_[i], LV_OBJ_FLAG_HIDDEN);
+        }
+    }
+}
+
+void LcdDisplay::MicVizTimerCb(lv_timer_t* timer) {
+    auto* self = static_cast<LcdDisplay*>(lv_timer_get_user_data(timer));
+    if (self == nullptr) {
+        return;
+    }
+    DisplayLockGuard lock(self);
+    if (self->mic_viz_bar_[0] == nullptr) {
+        // First tick: build the bars now that the UI exists.
+        self->CreateMicViz();
+        if (self->mic_viz_bar_[0] == nullptr) {
+            return;
+        }
+    }
+    self->mood_phase_ = (self->mood_phase_ + 1) % 2;
+    self->UpdateMicViz();
 }
 
 void LcdDisplay::SetTheme(Theme* theme) {
@@ -1583,6 +1782,19 @@ void LcdDisplay::SetTheme(Theme* theme) {
 
     // Update low battery popup
     lv_obj_set_style_bg_color(low_battery_popup_, lvgl_theme->low_battery_color(), 0);
+
+    // Re-color the mood icon so a theme switch does not leave it stale
+    if (emoji_label_ != nullptr) {
+        lv_obj_set_style_text_font(emoji_label_, large_icon_font, 0);
+        lv_obj_set_style_text_color(emoji_label_, lvgl_theme->text_color(), 0);
+    }
+    if (mic_viz_bar_[0] != nullptr) {
+        for (int i = 0; i < kMicVizBars; i++) {
+            if (mic_viz_bar_[i] != nullptr) {
+                lv_obj_set_style_bg_color(mic_viz_bar_[i], lvgl_theme->text_color(), 0);
+            }
+        }
+    }
 
     // No errors occurred. Save theme to settings
     Display::SetTheme(lvgl_theme);

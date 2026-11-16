@@ -1,5 +1,6 @@
 #include "audio_service.h"
 #include <esp_log.h>
+#include <cmath>
 #include <cstring>
 
 #define RATE_CVT_CFG(_src_rate, _dest_rate, _channel)                                        \
@@ -85,6 +86,7 @@ void AudioService::Initialize(AudioCodec* codec) {
     audio_engine_ = std::make_unique<LiteAudioEngine>();
 #endif
     audio_engine_->OnOutput([this](std::vector<int16_t>&& data) {
+        UpdateMicLevel(data);
         PushTaskToEncodeQueue(kAudioTaskTypeEncodeToSendQueue, std::move(data));
     });
     audio_engine_->OnVadStateChange([this](bool speaking) {
@@ -604,6 +606,27 @@ void AudioService::PushTaskToEncodeQueue(AudioTaskType type, std::vector<int16_t
                      (unsigned long)dropped_total);
         }
     }
+}
+
+void AudioService::UpdateMicLevel(const std::vector<int16_t>& pcm) {
+    if (pcm.empty()) {
+        return;
+    }
+    // Frame RMS. Speech sits around 1000..8000 for int16 mic data; normalize
+    // against 4000 and smooth so the visualizer moves like a level meter
+    // instead of flickering with every sample.
+    double sum = 0.0;
+    for (int16_t sample : pcm) {
+        double v = static_cast<double>(sample);
+        sum += v * v;
+    }
+    double rms = std::sqrt(sum / static_cast<double>(pcm.size()));
+    float level = static_cast<float>(rms / 4000.0);
+    if (level > 1.0f) {
+        level = 1.0f;
+    }
+    float smoothed = mic_level_.load() * 0.6f + level * 0.4f;
+    mic_level_.store(smoothed);
 }
 
 bool AudioService::PushPacketToDecodeQueue(std::unique_ptr<AudioStreamPacket> packet, bool wait) {

@@ -123,6 +123,10 @@ public:
     std::unique_ptr<AudioStreamPacket> PopWakeWordPacket();
     const std::string& GetLastWakeWord() const;
     bool IsVoiceDetected() const { return voice_detected_; }
+
+    // Smoothed microphone loudness (0..1), fed by the engine output path.
+    // Used by the display to draw the audio visualizer.
+    float GetMicLevel() const { return mic_level_.load(); }
     bool IsIdle();
     bool IsPlaybackIdle();
     bool IsWakeWordRunning() const {
@@ -215,6 +219,10 @@ private:
     void AudioOutputTask();
     void OpusCodecTask();
     void PushTaskToEncodeQueue(AudioTaskType type, std::vector<int16_t>&& pcm);
+
+    // RMS of the latest mic frame, smoothed into a 0..1 loudness value.
+    void UpdateMicLevel(const std::vector<int16_t>& pcm);
+    std::atomic<float> mic_level_{0.0f};
     bool InitializeAudioEngine();
     void SetDecodeSampleRate(int sample_rate, int frame_duration);
     void CheckAndUpdateAudioPowerState();

@@ -81,6 +81,11 @@ public:
      * Schedule a callback to be executed in the main task
      */
     void Schedule(std::function<void()>&& callback);
+    // Called on the main task with the recognized user speech (STT) text.
+    // Lets features (e.g. voice-driven song search) consume transcriptions.
+    void SetOnSttText(std::function<void(const std::string&)> callback) {
+        on_stt_text_ = std::move(callback);
+    }
 
     /**
      * Alert with status, message, emotion and optional sound
@@ -107,6 +112,13 @@ public:
      * Sends MAIN_EVENT_STOP_LISTENING to be handled in Run()
      */
     void StopListening();
+
+    /**
+     * Close just the audio channel, keeping the protocol connection alive.
+     * Frees the audio buffers (important on no-PSRAM targets) while still
+     * allowing StartListening() to reopen the channel later.
+     */
+    void CloseAudioChannel();
 
     void Reboot();
     void WakeWordInvoke(const std::string& wake_word);
@@ -135,6 +147,7 @@ private:
     std::unique_ptr<Protocol> protocol_;
     EventGroupHandle_t event_group_ = nullptr;
     esp_timer_handle_t clock_timer_handle_ = nullptr;
+    esp_timer_handle_t mic_viz_timer_handle_ = nullptr;
     DeviceStateMachine state_machine_;
     ListeningMode listening_mode_ = kListeningModeAutoStop;
     AecMode aec_mode_ = kAecOff;
@@ -145,6 +158,7 @@ private:
     std::unique_ptr<Ota> ota_;
 
     std::function<void(const std::string&)> mcp_broadcast_callback_;
+    std::function<void(const std::string&)> on_stt_text_;
 
     bool has_server_time_ = false;
     bool aborted_ = false;

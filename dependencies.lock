@@ -1,28 +1,28 @@
 dependencies:
   78/esp-ml307:
-    component_hash: 1af393fcb6e06930c4baec9d10c0cb400cef3f318e34aa4df1a2df4b5a4d4bd6
+    component_hash: cc43276d047bfece6142bb554c0264520f27fc8b4a5e2a23796099d485a99541
     dependencies:
+    - name: idf
+      require: private
+      version: '>=5.5.2'
     - name: 78/uart-uhci
       registry_url: https://components.espressif.com
       require: private
       rules:
       - if: target not in [esp32]
-      version: ^0.3.2
+      version: ^0.4.1
     - matches:
       - if: idf_version >=6.0
       name: espressif/mqtt
       registry_url: https://components.espressif.com
       require: private
       version: ^1.0.0
-    - name: idf
-      require: private
-      version: '>=5.5.2'
     source:
       registry_url: https://components.espressif.com/
       type: service
-    version: 3.7.4
+    version: 3.7.6
   78/esp-wifi-connect:
-    component_hash: 24232dc15ebb239212dab37bdc8f5553e37edf8806268a05c28a7aa42dcd9422
+    component_hash: f9150db21483df0879a11426e043a8feeee7557b470b293891b69aa66971fb33
     dependencies:
     - matches:
       - if: idf_version >=6.0
@@ -36,7 +36,7 @@ dependencies:
     source:
       registry_url: https://components.espressif.com/
       type: service
-    version: 3.3.1
+    version: 3.3.3
   78/esp_lcd_nv3023:
     component_hash: 2d1c227ae9c8d7303c0be9b2f2b45e595169a2ccb3055aad93b5f1600110b236
     dependencies:
@@ -52,12 +52,12 @@ dependencies:
       type: service
     version: 1.0.1
   78/uart-eth-modem:
-    component_hash: c7a256cd4d80c455a7d7c7d3a3ca14564b0b54238be18f1d0d9931e65fed39a3
+    component_hash: 71949c4dd1f8beba0c8d69f137f383f457f9f443bdfe7f5a8068e1dd37857a20
     dependencies:
     - name: 78/uart-uhci
       registry_url: https://components.espressif.com
       require: private
-      version: ^0.3.2
+      version: ^0.4.1
     - name: espressif/iot_eth
       registry_url: https://components.espressif.com
       require: private
@@ -68,9 +68,9 @@ dependencies:
     source:
       registry_url: https://components.espressif.com/
       type: service
-    version: 0.6.5
+    version: 0.7.1
   78/uart-uhci:
-    component_hash: 0e391c695621ac725506166b908146a02e9cff26e6d36f8e43e7e63b5b1d200f
+    component_hash: c9230a65f9c5dc1b87d97612d5dfd4b79a37cf0cb62123f7d659e5d4e2e0f193
     dependencies:
     - name: idf
       require: private
@@ -78,7 +78,7 @@ dependencies:
     source:
       registry_url: https://components.espressif.com
       type: service
-    version: 0.3.3
+    version: 0.4.1
   78/xiaozhi-fonts:
     component_hash: 3f4f9fa5dcb703208bf22e46a185bb2b4cc9d002b9474b90f7c77e55e0ac541a
     dependencies:
@@ -136,7 +136,7 @@ dependencies:
       type: service
     version: 0.2.2
   espressif/bq27220:
-    component_hash: 9b1c466ddfae07036c03cc1c2558466f343f604ae0cc5240deec6945441e38a0
+    component_hash: 5d7a7fa94c02f1a1483e321cb0fb0b6a23e226ba3424734bffbe486d6919938d
     dependencies:
     - name: espressif/cmake_utilities
       registry_url: https://components.espressif.com
@@ -145,16 +145,16 @@ dependencies:
     - name: espressif/i2c_bus
       registry_url: https://components.espressif.com
       require: public
-      version: ^1.4
+      version: ^1.5
     - name: idf
       require: private
       version: '>=4.4'
     source:
       registry_url: https://components.espressif.com/
       type: service
-    version: 0.1.2
+    version: 0.2.0
   espressif/button:
-    component_hash: a1f34e8ed2e61ffef1a230fd9477005c2db335c7e1f6a239f43e5f119dcbe1b0
+    component_hash: 26345e8700d3c6435925f9a8f246d224f9c1b99f937c243fe400844eec514b4a
     dependencies:
     - name: espressif/cmake_utilities
       registry_url: https://components.espressif.com
@@ -166,7 +166,7 @@ dependencies:
     source:
       registry_url: https://components.espressif.com/
       type: service
-    version: 4.2.1
+    version: 4.2.3
   espressif/cjson:
     component_hash: e788323270d90738662d66fffa910bfe1fba019bba087f01557e70c40485b469
     dependencies:
@@ -188,7 +188,7 @@ dependencies:
       type: service
     version: 0.5.0
   espressif/dl_fft:
-    component_hash: 3e8f7d34e04bfa6333f289a6d126745bebe0cee9311b81a6a5d106047f63ef65
+    component_hash: 965be7152132b365061abf5fc5fc7b85e525f73b94a204cdda61cfe9572c0d77
     dependencies:
     - name: idf
       require: private
@@ -196,7 +196,7 @@ dependencies:
     source:
       registry_url: https://components.espressif.com
       type: service
-    version: 0.7.0
+    version: 0.8.0
   espressif/esp-dsp:
     component_hash: 12e44db246517a627bc0fe2b255b8335410c0215c98bfba2df5a8e3edea839ef
     dependencies:
@@ -415,7 +415,7 @@ dependencies:
       type: service
     version: 2.0.2
   espressif/esp_lcd_st77922:
-    component_hash: 69ea9e217276500fcfc514c72e0b3094cc3b3c488e9dab71eaf34ab35945c5f4
+    component_hash: a4b2f74026d00ef184c9560abbff5ff3098229acff507ad1104450930e2a1f59
     dependencies:
     - name: espressif/cmake_utilities
       registry_url: https://components.espressif.com
@@ -427,7 +427,7 @@ dependencies:
     source:
       registry_url: https://components.espressif.com/
       type: service
-    version: 2.0.2
+    version: 2.1.1
   espressif/esp_lcd_touch:
     component_hash: 3f85a7d95af876f1a6ecca8eb90a81614890d0f03a038390804e5a77e2caf862
     dependencies:
@@ -560,7 +560,7 @@ dependencies:
     - esp32h4
     version: 1.0.2
   espressif/freetype:
-    component_hash: aa9f7657a69b2b1c1f49044017fc424081d4e0fe6e97834cb43883548d44e3ca
+    component_hash: f31808b6826df6aa58713e7fc7bcdafaa9c28fab47d2b9e9684dac6d89e3aea3
     dependencies:
     - name: idf
       require: private
@@ -568,7 +568,7 @@ dependencies:
     source:
       registry_url: https://components.espressif.com
       type: service
-    version: 2.14.3~1
+    version: 2.15.0
   espressif/gmf_fft:
     component_hash: b59451ef2f96d22b80c27a162515b21f1b85954dda434c0b092172164028779d
     dependencies: []
@@ -629,7 +629,7 @@ dependencies:
       type: service
     version: 3.0.3
   espressif/mdns:
-    component_hash: b679eafd0acae2066e2645bd91d073e33ca5be515e2545cd3c4e55a3e3bce3cb
+    component_hash: 2fa43caa78cc170842255bc7bf71f306bc815cae12e9496bfb12372423019ac7
     dependencies:
     - name: idf
       require: private
@@ -637,7 +637,7 @@ dependencies:
     source:
       registry_url: https://components.espressif.com
       type: service
-    version: 1.13.1
+    version: 1.15.1
   espressif/mqtt:
     component_hash: fb18bc3b65aa8c94693a9811ffc322cca8a65d92d5ec84983d3e385080e3969c
     dependencies:
@@ -749,7 +749,7 @@ dependencies:
   idf:
     source:
       type: idf
-    version: 6.1.0
+    version: 6.1.1
   laride/heatshrink:
     component_hash: 0828b0fea3f0754f8404a5279e883c52fe27494bbe1762e38d5cd96c99229e47
     dependencies:
@@ -890,6 +890,6 @@ direct_dependencies:
 - waveshare/custom_io_expander_ch32v003
 - waveshare/esp_lcd_sh8601
 - waveshare/esp_lcd_touch_cst9217
-manifest_hash: 061ac374d304516dad2f4db488232a79b0e55930c6a8c55da4b831077b929559
+manifest_hash: 5240709d5b6d754b0dc57bb67506b38ffbdd3472465e8e2729701c76c4cc58d9
 target: esp32c3
 version: 3.0.0

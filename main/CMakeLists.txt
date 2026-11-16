@@ -3,6 +3,11 @@ set(SOURCES "audio/audio_codec.cc"
             "audio/audio_debugger.cc"
             "audio/audio_service.cc"
             "audio/demuxer/ogg_demuxer.cc"
+            "media/archive_client.cc"
+            "media/radio_client.cc"
+            "media/music_player.cc"
+            "media/text_writer.cc"
+            "media/media_mode.cc"
             "notify/notify_player.cc"
             "audio/codecs/no_audio_codec.cc"
             "audio/codecs/box_audio_codec.cc"
@@ -322,6 +327,7 @@ idf_component_register(SRCS ${SOURCES}
                         esp_driver_tsens
                         esp_app_format
                         app_update
+                        esp_http_client
                         spi_flash
                         mbedtls
                         console

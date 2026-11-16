@@ -15,6 +15,8 @@
 // PSRAM; forcing a 16 kHz -> 24 kHz resampler allocates a temporary buffer
 // during playback and can fragment the remaining internal SRAM.
 #define AUDIO_INPUT_SAMPLE_RATE  16000
+// The ES8311 on the Passport runs duplex at one rate, so output must match
+// input; the music player resamples decoded audio down to this rate.
 #define AUDIO_OUTPUT_SAMPLE_RATE 16000
 
 // I2S full-duplex to ES8311 (shared MCLK/BCLK/WS).

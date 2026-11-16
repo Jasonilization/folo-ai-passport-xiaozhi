@@ -37,6 +37,32 @@ protected:
     std::unique_ptr<LvglImage> preview_image_cached_ = nullptr;
     bool hide_subtitle_ = false;  // Control whether to hide chat messages/subtitles
 
+    // Minimal, icon-only mood: a single Material Symbols glyph plus a cheap
+    // breathe/bob animation. Replaces the emoji image path entirely.
+    const char* mood_glyph_ = nullptr;
+    uint32_t mood_period_ms_ = 0;  // 0 = static, no mood timer
+    bool mood_bob_ = false;
+    int mood_phase_ = 0;
+    lv_timer_t* mood_timer_ = nullptr;
+
+    void UpdateMood(const char* mood);
+    static void MoodTimerCb(lv_timer_t* timer);
+
+    // Microphone level meter: a small bar row at the bottom edge, driven by
+    // the smoothed RMS from AudioService. Attack is fast, decay is slow.
+    static constexpr int kMicVizBars = 16;
+    static constexpr int kMicVizBarHeight = 14;  // full-scale bar height (px)
+    static constexpr int kMicVizBarWidth = 5;    // bar width (px)
+    static constexpr int kMicVizBarGap = 2;      // gap between bars (px)
+    lv_obj_t* mic_viz_bar_[kMicVizBars] = {};
+    lv_timer_t* mic_viz_timer_ = nullptr;
+    bool mic_viz_enabled_ = true;
+    float mic_level_target_ = 0.0f;  // latest level pushed from AudioService
+    float mic_level_shown_ = 0.0f;   // animated level actually drawn
+    void CreateMicViz();
+    void UpdateMicViz();
+    static void MicVizTimerCb(lv_timer_t* timer);
+
     void InitializeLcdThemes();
     virtual bool Lock(int timeout_ms = 0) override;
     virtual void Unlock() override;
@@ -60,6 +86,13 @@ public:
 
     // Set whether to hide chat messages/subtitles
     virtual void SetHideSubtitle(bool hide) override;
+
+    // Scroll the chat history by a vertical step (history scroll-back)
+    virtual void ScrollChatMessages(int scroll_step_y) override;
+
+    // Live microphone loudness (0..1) for the level meter
+    virtual void SetMicLevel(float level) override;
+    virtual void SetMicVisualizerEnabled(bool enabled) override;
 };
 
 // SPI LCD display
