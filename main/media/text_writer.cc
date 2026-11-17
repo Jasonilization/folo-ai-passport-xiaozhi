@@ -69,7 +69,7 @@ void TextWriter::Build() {
     panel_ = lv_obj_create(screen);
     lv_obj_set_size(panel_, w - 12, h - 12);
     lv_obj_center(panel_);
-    lv_obj_set_style_radius(panel_, 16, 0);
+    lv_obj_set_style_radius(panel_, 0, 0);
     lv_obj_set_style_bg_color(panel_, theme->background_color(), 0);
     lv_obj_set_style_bg_opa(panel_, LV_OPA_COVER, 0);
     lv_obj_set_style_border_color(panel_, theme->border_color(), 0);
@@ -107,7 +107,7 @@ void TextWriter::Build() {
     for (const auto& cell : cells_) {
         auto* r = lv_obj_create(list_);
         lv_obj_set_size(r, LV_PCT(100), 26);
-        lv_obj_set_style_radius(r, 8, 0);
+        lv_obj_set_style_radius(r, 0, 0);
         lv_obj_set_style_bg_opa(r, LV_OPA_TRANSP, 0);
         lv_obj_set_style_border_width(r, 0, 0);
         lv_obj_clear_flag(r, LV_OBJ_FLAG_SCROLLABLE);

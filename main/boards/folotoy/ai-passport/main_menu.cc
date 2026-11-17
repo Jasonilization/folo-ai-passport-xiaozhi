@@ -57,7 +57,7 @@ void MainMenu::Open(std::vector<Item> items) {
     for (const auto& item : items_) {
         auto* r = lv_obj_create(list_);
         lv_obj_set_size(r, LV_PCT(100), 34);
-        lv_obj_set_style_radius(r, 10, 0);
+        lv_obj_set_style_radius(r, 0, 0);
         lv_obj_set_style_bg_opa(r, LV_OPA_TRANSP, 0);
         lv_obj_set_style_border_width(r, 0, 0);
         lv_obj_set_style_pad_left(r, 12, 0);
@@ -108,7 +108,7 @@ void MainMenu::Build() {
     panel_ = lv_obj_create(screen);
     lv_obj_set_size(panel_, w - 12, h - 12);
     lv_obj_center(panel_);
-    lv_obj_set_style_radius(panel_, 16, 0);
+    lv_obj_set_style_radius(panel_, 0, 0);
     lv_obj_set_style_bg_color(panel_, theme->background_color(), 0);
     lv_obj_set_style_bg_opa(panel_, LV_OPA_COVER, 0);
     lv_obj_set_style_border_color(panel_, theme->border_color(), 0);
@@ -144,7 +144,7 @@ void MainMenu::Build() {
     cursor_ = lv_obj_create(list_);
     lv_obj_set_size(cursor_, 5, 34);
     lv_obj_set_x(cursor_, 1);
-    lv_obj_set_style_radius(cursor_, 2, 0);
+    lv_obj_set_style_radius(cursor_, 0, 0);
     lv_obj_set_style_bg_color(cursor_, lv_color_hex(kAccent), 0);
     lv_obj_set_style_bg_opa(cursor_, LV_OPA_70, 0);
     lv_obj_set_style_border_width(cursor_, 0, 0);
@@ -232,7 +232,7 @@ void MainMenu::UpdateSelection() {
         cursor_ = lv_obj_create(list_);
         lv_obj_set_size(cursor_, 5, 34);
         lv_obj_set_x(cursor_, 1);
-        lv_obj_set_style_radius(cursor_, 2, 0);
+        lv_obj_set_style_radius(cursor_, 0, 0);
         lv_obj_set_style_bg_color(cursor_, lv_color_hex(kAccent), 0);
         lv_obj_set_style_bg_opa(cursor_, LV_OPA_70, 0);
         lv_obj_set_style_border_width(cursor_, 0, 0);
