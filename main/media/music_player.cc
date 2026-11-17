@@ -209,6 +209,10 @@ void MusicPlayer::RunImpl() {
             config.user_data = &saw_disconnect_;
             config.crt_bundle_attach = esp_crt_bundle_attach;
             client = esp_http_client_init(&config);
+            // Some stream servers close the connection without these.
+            esp_http_client_set_header(client, "User-Agent", "ESP32-Media/1.0");
+            esp_http_client_set_header(client, "Accept", "*/*");
+            esp_http_client_set_header(client, "Icy-MetaData", "1");
             // fetch_headers returns content length (-1/0 for chunked radio
             // streams is NOT an error, so don't check it).
             if (client == nullptr || esp_http_client_open(client, 0) != ESP_OK) {
@@ -308,6 +312,9 @@ void MusicPlayer::RunImpl() {
         if (in_len < kInBufSize / 2 && !eof) {
             int r = esp_http_client_read(client, reinterpret_cast<char*>(in + in_len),
                                          kInBufSize - in_len);
+            if (r != 0 && total_read + r < 2048) {
+                ESP_LOGI(TAG, "stage: first read r=%d", r);
+            }
             if (r > 0) {
                 in_len += r;
                 total_read += r;
