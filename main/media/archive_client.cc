@@ -155,7 +155,7 @@ bool ArchiveClient::SearchImpl(const std::string& query, int limit,
                                std::vector<MediaItem>& out) {
     out.clear();
     // mediatype:audio keeps noise down; q matches title/description fields.
-    std::string url = "https://archive.org/advancedsearch.php?q=(" + UrlEncode(query) +
+    std::string url = "http://archive.org/advancedsearch.php?q=(" + UrlEncode(query) +
                       ")+AND+mediatype%3Aaudio&fl%5B%5D=identifier&fl%5B%5D=title&fl%5B%5D="
                       "creator&rows=" +
                       std::to_string(limit) +
@@ -207,7 +207,7 @@ bool ArchiveClient::ListFilesImpl(const std::string& identifier, std::vector<Med
     // Stream-scan the metadata JSON in chunks: music items can have metadata
     // well over 200KB, which will never fit the C3 heap in one buffer. We only
     // keep the audio file entries we find (bounded), never the whole document.
-    const std::string url = "https://archive.org/metadata/" + identifier;
+    const std::string url = "http://archive.org/metadata/" + identifier;
 
     esp_http_client_config_t config = {};
     config.url = url.c_str();
@@ -284,7 +284,7 @@ bool ArchiveClient::ListFilesImpl(const std::string& identifier, std::vector<Med
     };
     auto try_emit = [&](MediaFile& mf) {
         if (classify(mf)) {
-            mf.url = "https://archive.org/download/" + identifier + "/" + UrlEncode(mf.name);
+            mf.url = "http://archive.org/download/" + identifier + "/" + UrlEncode(mf.name);
             out.push_back(std::move(mf));
         }
     };
