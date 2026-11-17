@@ -567,9 +567,11 @@ public:
         // Media mode is created lazily on first use: building it here would
         // construct the ES8311 codec much earlier in boot than the app does.
 
-        // One-shot network self test; logs to the serial monitor ~12 s after
-        // boot so the media providers can be verified without pressing keys.
-        xTaskCreate(MediaSelfTestTask, "media_selftest", 10240, this, 3, nullptr);
+        // The boot self-test is disabled: its concurrent TLS/streaming at 12 s
+        // was the heap-corruption crash correlator (crashes could wipe NVS,
+        // which then dropped the device into WiFi config mode on next boot).
+        // Keep the function for manual runs via a serial console if needed.
+        // xTaskCreate(MediaSelfTestTask, "media_selftest", 10240, this, 3, nullptr);
         xTaskCreate(SntpInitTask, "sntp_init", 3072, nullptr, 3, nullptr);
         // Force dark theme + apply saved rotation once LVGL is up.
         LoadLandscape();
