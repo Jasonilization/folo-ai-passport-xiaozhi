@@ -511,10 +511,14 @@ private:
         // logical resolution swapped accordingly. Applied at boot from NVS so
         // LVGL is created with the right hres/vres (no software rotation).
         const bool swap_xy = DISPLAY_SWAP_XY != landscape_;
+        // Rotating 90 deg also needs both mirrors flipped, otherwise the
+        // landscape image comes out upside down.
+        const bool mirror_x = DISPLAY_MIRROR_X != landscape_;
+        const bool mirror_y = DISPLAY_MIRROR_Y != landscape_;
         esp_lcd_panel_invert_color(panel, DISPLAY_INVERT_COLOR);
         esp_lcd_panel_set_gap(panel, DISPLAY_OFFSET_X, DISPLAY_OFFSET_Y);
         esp_lcd_panel_swap_xy(panel, swap_xy);
-        esp_lcd_panel_mirror(panel, DISPLAY_MIRROR_X, DISPLAY_MIRROR_Y);
+        esp_lcd_panel_mirror(panel, mirror_x, mirror_y);
         esp_lcd_panel_disp_on_off(panel, true);
 
         const int width = swap_xy ? DISPLAY_HEIGHT : DISPLAY_WIDTH;
@@ -522,7 +526,7 @@ private:
         display_ = new SpiLcdDisplay(panel_io, panel,
                                      width, height,
                                      DISPLAY_OFFSET_X, DISPLAY_OFFSET_Y,
-                                     DISPLAY_MIRROR_X, DISPLAY_MIRROR_Y, swap_xy);
+                                     mirror_x, mirror_y, swap_xy);
     }
 
 public:

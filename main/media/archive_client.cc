@@ -4,6 +4,9 @@
 #include <esp_crt_bundle.h>
 #include <esp_http_client.h>
 #include <esp_heap_caps.h>
+#include <ctime>
+#include <freertos/FreeRTOS.h>
+#include <freertos/task.h>
 #include <esp_log.h>
 
 #include <cctype>
@@ -52,8 +55,17 @@ esp_err_t HttpEventHandler(esp_http_client_event_t* evt) {
     return ESP_OK;
 }
 
+// TLS certificate validation needs a sane clock; SNTP syncs shortly after
+// WiFi connects, so wait for it before the first HTTPS request.
+static void WaitForTimeSync() {
+    for (int i = 0; i < 20 && time(nullptr) < 1735689600; i++) {
+        vTaskDelay(pdMS_TO_TICKS(1000));
+    }
+}
+
 bool HttpGet(const std::string& url, HttpResponse& resp, size_t cap = 24 * 1024,
              const char* range = nullptr) {
+    WaitForTimeSync();
     // The C3 heap is small and fragmented; if the full buffer won't fit, try
     // smaller windows rather than failing outright.
     while (cap >= 8 * 1024) {

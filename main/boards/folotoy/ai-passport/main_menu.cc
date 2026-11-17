@@ -8,6 +8,15 @@ namespace {
 LvglTheme* ThemeOf(LcdDisplay* display) {
     return static_cast<LvglTheme*>(display->GetTheme());
 }
+// Accent used for the selection highlight (dark theme -> vivid amber).
+constexpr uint32_t kAccent = 0xFFB020;
+// Per-item icon hues so the menu reads as a colorful launcher, not a list.
+lv_color_t IconHue(int id) {
+    static const uint32_t kPalette[] = {
+        0xFFB020, 0x4FC3F7, 0x81C784, 0xFF8A65, 0xBA68C8, 0xFFF176, 0x4DB6AC, 0xF06292,
+    };
+    return lv_color_hex(kPalette[((id % 8) + 8) % 8]);
+}
 }  // namespace
 
 void MainMenu::Open(std::vector<Item> items) {
@@ -60,6 +69,7 @@ void MainMenu::Open(std::vector<Item> items) {
 
         auto* ic = lv_label_create(r);
         lv_obj_set_style_text_font(ic, theme->icon_font()->font(), 0);
+        lv_obj_set_style_text_color(ic, IconHue(item.id), 0);
         lv_label_set_text(ic, item.icon != nullptr ? item.icon : "");
 
         auto* tx = lv_label_create(r);
@@ -135,7 +145,7 @@ void MainMenu::Build() {
     lv_obj_set_size(cursor_, 5, 34);
     lv_obj_set_x(cursor_, 1);
     lv_obj_set_style_radius(cursor_, 2, 0);
-    lv_obj_set_style_bg_color(cursor_, theme->text_color(), 0);
+    lv_obj_set_style_bg_color(cursor_, lv_color_hex(kAccent), 0);
     lv_obj_set_style_bg_opa(cursor_, LV_OPA_70, 0);
     lv_obj_set_style_border_width(cursor_, 0, 0);
     lv_obj_set_style_pad_all(cursor_, 0, 0);
@@ -206,11 +216,12 @@ void MainMenu::UpdateSelection() {
         bool sel = static_cast<int>(i) == selected_;
         lv_obj_set_style_bg_opa(row_[i], sel ? LV_OPA_COVER : LV_OPA_TRANSP, 0);
         if (sel) {
-            lv_obj_set_style_bg_color(row_[i], theme->text_color(), 0);
-            lv_obj_set_style_text_color(row_icon_[i], theme->background_color(), 0);
-            lv_obj_set_style_text_color(row_text_[i], theme->background_color(), 0);
+            lv_obj_set_style_bg_color(row_[i], lv_color_hex(kAccent), 0);
+            lv_obj_set_style_text_color(row_icon_[i], lv_color_hex(0x14100A), 0);
+            lv_obj_set_style_text_color(row_text_[i], lv_color_hex(0x14100A), 0);
         } else {
-            lv_obj_set_style_text_color(row_icon_[i], theme->text_color(), 0);
+            // unselected icons keep their own hue from the palette
+            lv_obj_set_style_text_color(row_icon_[i], IconHue(items_[i].id), 0);
             lv_obj_set_style_text_color(row_text_[i], theme->text_color(), 0);
         }
     }
@@ -222,9 +233,7 @@ void MainMenu::UpdateSelection() {
         lv_obj_set_size(cursor_, 5, 34);
         lv_obj_set_x(cursor_, 1);
         lv_obj_set_style_radius(cursor_, 2, 0);
-        if (theme2 != nullptr) {
-            lv_obj_set_style_bg_color(cursor_, theme2->text_color(), 0);
-        }
+        lv_obj_set_style_bg_color(cursor_, lv_color_hex(kAccent), 0);
         lv_obj_set_style_bg_opa(cursor_, LV_OPA_70, 0);
         lv_obj_set_style_border_width(cursor_, 0, 0);
         lv_obj_set_style_pad_all(cursor_, 0, 0);

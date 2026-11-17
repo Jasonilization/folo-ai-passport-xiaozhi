@@ -14,6 +14,22 @@ namespace {
 LvglTheme* ThemeOf(LcdDisplay* display) {
     return static_cast<LvglTheme*>(display->GetTheme());
 }
+constexpr uint32_t kAccent = 0xFFB020;
+lv_color_t TagHue(int tag) {
+    switch (tag) {
+        case 1: return lv_color_hex(0x4FC3F7);   // search
+        case 2: return lv_color_hex(0xFF8A65);   // voice
+        case 3: return lv_color_hex(0x81C784);   // type
+        case 4: return lv_color_hex(0xBA68C8);   // quick album
+        case 5: return lv_color_hex(0xF06292);   // search history
+        case 6: return lv_color_hex(0xFFF176);   // recent files
+        case 7: return lv_color_hex(0x4DB6AC);   // played
+        case 8: return lv_color_hex(0xFFB020);   // radio
+        case 9: return lv_color_hex(0xFF7043);   // resume
+        case 10: return lv_color_hex(0x90A4AE);  // exit
+        default: return lv_color_hex(0x90A4AE);  // back
+    }
+}
 }  // namespace
 
 MediaMode::MediaMode(LcdDisplay* display, AudioCodec* codec)
@@ -239,7 +255,7 @@ void MediaMode::RebuildRows(const std::vector<Row>& rows, const std::string& tit
 
         auto* ic = lv_label_create(r);
         lv_obj_set_style_text_font(ic, theme->icon_font()->font(), 0);
-        lv_obj_set_style_text_color(ic, theme->text_color(), 0);
+        lv_obj_set_style_text_color(ic, TagHue(row.tag), 0);
         lv_label_set_text(ic, row.icon.c_str());
 
         auto* tx = lv_label_create(r);
@@ -269,13 +285,11 @@ void MediaMode::UpdateSelection() {
         bool sel = i == selected_;
         lv_obj_set_style_bg_opa(row_objs_[i], sel ? LV_OPA_COVER : LV_OPA_TRANSP, 0);
         if (sel) {
-            lv_obj_set_style_bg_color(row_objs_[i], theme->text_color(), 0);
-            lv_obj_set_style_text_color(lv_obj_get_child(row_objs_[i], 0),
-                                        theme->background_color(), 0);
-            lv_obj_set_style_text_color(lv_obj_get_child(row_objs_[i], 1),
-                                        theme->background_color(), 0);
+            lv_obj_set_style_bg_color(row_objs_[i], lv_color_hex(kAccent), 0);
+            lv_obj_set_style_text_color(lv_obj_get_child(row_objs_[i], 0), lv_color_hex(0x14100A), 0);
+            lv_obj_set_style_text_color(lv_obj_get_child(row_objs_[i], 1), lv_color_hex(0x14100A), 0);
         } else {
-            lv_obj_set_style_text_color(lv_obj_get_child(row_objs_[i], 0), theme->text_color(), 0);
+            lv_obj_set_style_text_color(lv_obj_get_child(row_objs_[i], 0), TagHue(rows_[i].tag), 0);
             lv_obj_set_style_text_color(lv_obj_get_child(row_objs_[i], 1), theme->text_color(), 0);
         }
     }

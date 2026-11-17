@@ -145,12 +145,14 @@ void TextWriter::UpdateSelection() {
         bool sel = i == selected_;
         lv_obj_set_style_bg_opa(rows_[i], sel ? LV_OPA_COVER : LV_OPA_TRANSP, 0);
         if (sel) {
-            lv_obj_set_style_bg_color(rows_[i], theme->text_color(), 0);
-            // Selected row paints its label in the background color.
-            lv_obj_set_style_text_color(lv_obj_get_child(rows_[i], 0),
-                                        theme->background_color(), 0);
+            lv_obj_set_style_bg_color(rows_[i], lv_color_hex(0xFFB020), 0);
+            // Selected row paints its label dark on the amber highlight.
+            lv_obj_set_style_text_color(lv_obj_get_child(rows_[i], 0), lv_color_hex(0x14100A), 0);
         } else {
-            lv_obj_set_style_text_color(lv_obj_get_child(rows_[i], 0), theme->text_color(), 0);
+            // letters cool, digits warm, actions distinct
+            const auto& cell = cells_[i];
+            uint32_t hue = cell.type == 0 ? 0x4FC3F7 : cell.type == 1 ? 0xFF8A65 : 0x81C784;
+            lv_obj_set_style_text_color(lv_obj_get_child(rows_[i], 0), lv_color_hex(hue), 0);
         }
     }
     lv_obj_scroll_to_view(rows_[selected_], LV_ANIM_ON);
