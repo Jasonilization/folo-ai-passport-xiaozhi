@@ -66,10 +66,11 @@ void MediaMode::Open() {
     if (display_ == nullptr) {
         return;
     }
-    // Free heap for TLS: the assistant's audio channel holds a large chunk of
-    // RAM while open, which makes HTTPS handshakes fail on the C3. Close it
-    // while browsing; voice search reopens it via StartListening.
-    Application::GetInstance().CloseAudioChannel();
+    // Drop the assistant's MQTT protocol entirely while browsing: on the C3
+    // (400KB RAM, no PSRAM) an HTTP stream running concurrently with the MQTT
+    // socket corrupts the heap (tlsf double-free crashes). Voice search and
+    // exiting media mode re-create the protocol via InitializeProtocol().
+    Application::GetInstance().ResetProtocol();
     open_ = true;
     state_ = State::kRoot;
     DisplayLockGuard lock(display_);
@@ -91,6 +92,8 @@ void MediaMode::Close() {
     if (player_ != nullptr) {
         player_->Stop();
     }
+    // Restore the assistant's protocol so chat works after exiting music.
+    Application::GetInstance().ReconnectProtocol();
     if (writer_ != nullptr && writer_->IsOpen()) {
         writer_->Close();
     }
@@ -603,7 +606,17 @@ void MediaMode::StartVoiceSearch() {
     // instead of a fake list entry.
     state_ = State::kSearchHub;
     ShowSearchHub("LISTENING...");
-    Application::GetInstance().StartListening();
+    // Media mode dropped the protocol; re-create it, give it a moment to
+    // connect, then start listening.
+    Application::GetInstance().ReconnectProtocol();
+    xTaskCreate(
+        [](void* arg) {
+            vTaskDelay(pdMS_TO_TICKS(4000));
+            Application::GetInstance().Schedule(
+                []() { Application::GetInstance().StartListening(); });
+            vTaskDelete(nullptr);
+        },
+        "vs_reconnect", 4096, nullptr, 3, nullptr);
     // If no speech is recognized within 12 s, bail out instead of hanging.
     xTaskCreate(
         [](void* arg) {

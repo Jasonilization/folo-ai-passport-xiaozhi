@@ -113,6 +113,10 @@ public:
      */
     void StopListening();
 
+    // Re-create the protocol from scratch (used to restore the assistant
+    // after media mode dropped it for heap stability).
+    void ReconnectProtocol() { InitializeProtocol(); }
+
     /**
      * Close just the audio channel, keeping the protocol connection alive.
      * Frees the audio buffers (important on no-PSRAM targets) while still

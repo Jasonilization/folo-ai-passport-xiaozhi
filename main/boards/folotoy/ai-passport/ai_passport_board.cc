@@ -23,8 +23,10 @@
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 #include <esp_netif.h>
+#include <esp_wifi.h>
 #include <esp_netif_sntp.h>
 #include <esp_netif.h>
+#include <esp_wifi.h>
 #include <cstring>
 #include <nvs_flash.h>
 #include <lvgl.h>
@@ -579,6 +581,14 @@ public:
         xTaskCreate(SntpInitTask, "sntp_init", 3072, nullptr, 3, nullptr);
         g_board_for_console = this;
         StartMediaConsole();
+        // Aggressive modem power-save drops this weak link (reason 201), which
+        // then cascades into WiFi config mode. Disable PS on connect.
+        SetNetworkEventCallback([](NetworkEvent event, const std::string& data) {
+            if (event == NetworkEvent::Connected) {
+                esp_wifi_set_ps(WIFI_PS_NONE);
+                ESP_LOGI(TAG, "WiFi power save disabled for stability");
+            }
+        });
         // Force dark theme + apply saved rotation once LVGL is up.
         LoadLandscape();
         Application::GetInstance().Schedule([this]() {
