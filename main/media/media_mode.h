@@ -53,6 +53,7 @@ private:
         kTagVoiceSearch,
         kTagTypeSearch,
         kTagHistory,
+        kTagQuick,
         kTagSearchHistory,
         kTagFilesHistory,
         kTagPlayed,
@@ -83,6 +84,8 @@ private:
     void ShowSearchHub(const std::string& title = "");
     void StartVoiceSearch();
     void VoiceSearchTimeout();
+    void SaveHistory();
+    void LoadHistory();
     void OnSttText(const std::string& text);
     void OpenItem(const MediaItem& item);
     void PlayTrack(const MediaTrack& track);

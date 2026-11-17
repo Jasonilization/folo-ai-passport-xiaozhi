@@ -69,6 +69,7 @@ private:
     void* decoder_ = nullptr;
     void* resampler_ = nullptr;
     int resampler_channels_ = 0;
+    std::atomic<bool> saw_disconnect_{false};
 };
 
 #endif

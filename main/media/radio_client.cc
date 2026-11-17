@@ -98,7 +98,9 @@ bool RadioClient::SearchImpl(const std::string& query, int limit, std::vector<Me
         "fi1.api.radio-browser.info",
     };
     for (const char* host : kHosts) {
-        std::string url = std::string("https://") + host +
+        // Plain HTTP: radio-browser serves both, and the C3 has little heap
+        // for a second TLS session.
+        std::string url = std::string("http://") + host +
                           "/json/stations/search?name=" + UrlEncode(query) + "&limit=" +
                           std::to_string(limit) + "&order=votes&reverse=true&hidebroken=true";
         RadioResponse resp;

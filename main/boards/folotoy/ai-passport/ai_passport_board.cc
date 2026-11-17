@@ -188,11 +188,8 @@ private:
     }
 
     void ApplyLandscape() {
-        auto* disp = lv_display_get_default();
-        if (disp != nullptr) {
-            lv_display_set_rotation(disp, landscape_ ? LV_DISPLAY_ROTATION_90
-                                                     : LV_DISPLAY_ROTATION_0);
-        }
+        // Hardware rotation is applied at boot (panel swap_xy), so a toggle
+        // takes effect after reboot.
     }
 
     void ToggleLandscape() {
@@ -203,8 +200,7 @@ private:
             nvs_commit(h);
             nvs_close(h);
         }
-        ApplyLandscape();
-        ShowToast(landscape_ ? "Landscape (takes effect now)" : "Portrait");
+        ShowToast(landscape_ ? "Landscape on - reboot to apply" : "Portrait - reboot to apply");
     }
 
     // The Passport UI is always dark; no light mode.
@@ -511,20 +507,27 @@ private:
             }
         }
 
+        // Landscape = hardware 90 deg rotation of the panel (swap_xy), with the
+        // logical resolution swapped accordingly. Applied at boot from NVS so
+        // LVGL is created with the right hres/vres (no software rotation).
+        const bool swap_xy = DISPLAY_SWAP_XY != landscape_;
         esp_lcd_panel_invert_color(panel, DISPLAY_INVERT_COLOR);
         esp_lcd_panel_set_gap(panel, DISPLAY_OFFSET_X, DISPLAY_OFFSET_Y);
-        esp_lcd_panel_swap_xy(panel, DISPLAY_SWAP_XY);
+        esp_lcd_panel_swap_xy(panel, swap_xy);
         esp_lcd_panel_mirror(panel, DISPLAY_MIRROR_X, DISPLAY_MIRROR_Y);
         esp_lcd_panel_disp_on_off(panel, true);
 
+        const int width = swap_xy ? DISPLAY_HEIGHT : DISPLAY_WIDTH;
+        const int height = swap_xy ? DISPLAY_WIDTH : DISPLAY_HEIGHT;
         display_ = new SpiLcdDisplay(panel_io, panel,
-                                     DISPLAY_WIDTH, DISPLAY_HEIGHT,
+                                     width, height,
                                      DISPLAY_OFFSET_X, DISPLAY_OFFSET_Y,
-                                     DISPLAY_MIRROR_X, DISPLAY_MIRROR_Y, DISPLAY_SWAP_XY);
+                                     DISPLAY_MIRROR_X, DISPLAY_MIRROR_Y, swap_xy);
     }
 
 public:
     AiPassportBoard() : display_(nullptr), battery_(nullptr) {
+        LoadLandscape();  // before display init: picks hardware rotation
         InitializeCodecI2c();
         InitializeSpi();
         InitializeDisplay();
@@ -603,6 +606,10 @@ static void MediaSelfTestTask(void* arg) {
     for (const char* q : {"asgore", "kessoku band", "undertale megalovania"}) {
         std::vector<MediaItem> items;
         bool ok = archive.Search(q, 5, items);
+        if (!ok) {
+            vTaskDelay(pdMS_TO_TICKS(6000));
+            ok = archive.Search(q, 5, items);
+        }
         ESP_LOGI("AiPassport", "self-test: search \"%s\" -> %s (%u items)", q,
                  ok ? "ok" : "FAILED", (unsigned)items.size());
         for (const auto& item : items) {
@@ -615,6 +622,10 @@ static void MediaSelfTestTask(void* arg) {
             ESP_LOGI("AiPassport", "self-test: listing %s ...",
                      items[0].identifier.c_str());
             bool fok = archive.ListFiles(items[0].identifier, files);
+            if (!fok) {
+                vTaskDelay(pdMS_TO_TICKS(4000));
+                fok = archive.ListFiles(items[0].identifier, files);
+            }
             ESP_LOGI("AiPassport", "self-test: files %s (%u entries), heap %u",
                      fok ? "ok" : "FAILED", (unsigned)files.size(),
                      (unsigned)esp_get_free_heap_size());
@@ -654,6 +665,7 @@ static void MediaSelfTestTask(void* arg) {
     if (rok && !stations.empty()) {
         ESP_LOGI("AiPassport", "self-test: streaming radio %s for 5s...",
                  stations[0].url.c_str());
+        Application::GetInstance().CloseAudioChannel();
         MusicPlayer player(board->GetAudioCodec());
         std::atomic<int> events{0};
         player.SetCallback([&events](MusicPlayer::Event ev, const MediaTrack& t, int a) {

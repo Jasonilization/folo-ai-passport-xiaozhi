@@ -3,7 +3,9 @@
 #include "application.h"
 #include "archive_client.h"
 
+#include <cJSON.h>
 #include <esp_log.h>
+#include <nvs_flash.h>
 #include <material_symbols.h>
 
 #define TAG "MediaMode"
@@ -33,6 +35,7 @@ MediaMode::MediaMode(LcdDisplay* display, AudioCodec* codec)
     Application::GetInstance().SetOnSttText([this](const std::string& text) {
         OnSttText(text);
     });
+    LoadHistory();
 }
 
 MediaMode::~MediaMode() {
@@ -421,6 +424,16 @@ void MediaMode::ActivateRow(int position) {
             state_ = State::kTyping;
             writer_->Open("");
             break;
+        case kTagQuick: {
+            static const char* kQuickIds[] = {"undertaleost_202004", "deltarune-soundtrack"};
+            static const char* kQuickTitles[] = {"Undertale OST", "Deltarune OST"};
+            if (row.index < 0 || row.index > 1) return;
+            MediaItem item;
+            item.identifier = kQuickIds[row.index];
+            item.title = kQuickTitles[row.index];
+            OpenItem(item);
+            break;
+        }
         case kTagVoiceSearch:
             StartVoiceSearch();
             break;
@@ -533,6 +546,10 @@ void MediaMode::ShowSearchHub(const std::string& title) {
     std::vector<Row> rows;
     rows.push_back({kTagVoiceSearch, 0, "Speak a song", MATERIAL_SYMBOLS_MIC});
     rows.push_back({kTagTypeSearch, 0, "Type a song", MATERIAL_SYMBOLS_SEARCH});
+    // Preloaded albums (verified archive.org identifiers) so favorite OSTs are
+    // one tap away without searching.
+    rows.push_back({kTagQuick, 0, "Undertale OST", MATERIAL_SYMBOLS_MUSIC_NOTE});
+    rows.push_back({kTagQuick, 1, "Deltarune OST", MATERIAL_SYMBOLS_MUSIC_NOTE});
     rows.push_back({kTagBack, 0, "Back", MATERIAL_SYMBOLS_ARROW_BACK});
     state_ = State::kSearchHub;
     RebuildRows(rows, title.empty() ? "SEARCH" : title);
@@ -550,6 +567,7 @@ void MediaMode::StartSearch(const std::string& query) {
     if (history_.size() > 8) {
         history_.pop_back();
     }
+    SaveHistory();
     state_ = State::kItems;
     auto* fetch = new FetchItems{this, query};
     xTaskCreate(FetchItemsTask, "ia_search", 10240, fetch, 5, nullptr);
@@ -570,7 +588,7 @@ void MediaMode::StartVoiceSearch() {
     xTaskCreate(
         [](void* arg) {
             auto* self = static_cast<MediaMode*>(arg);
-            vTaskDelay(pdMS_TO_TICKS(12000));
+            vTaskDelay(pdMS_TO_TICKS(20000));
             Application::GetInstance().Schedule([self]() { self->VoiceSearchTimeout(); });
             vTaskDelete(nullptr);
         },
@@ -594,6 +612,8 @@ void MediaMode::OnSttText(const std::string& text) {
     voice_search_pending_ = false;
     ESP_LOGI(TAG, "voice search query: %s", text.c_str());
     Application::GetInstance().StopListening();
+    // Free the audio channel's heap before the HTTPS search.
+    Application::GetInstance().CloseAudioChannel();
     StartSearch(text);
 }
 
@@ -609,7 +629,13 @@ void MediaMode::FetchItemsTask(void* arg) {
     auto items = std::make_shared<std::vector<MediaItem>>();
     auto status = std::make_shared<int>(kFetchError);
     ArchiveClient client;
-    if (client.Search(fetch->query, 20, *items)) {
+    bool ok = client.Search(fetch->query, 20, *items);
+    if (!ok) {
+        // One retry: boot-time TLS sessions (OTA/MQTT) can starve the heap.
+        vTaskDelay(pdMS_TO_TICKS(4000));
+        ok = client.Search(fetch->query, 20, *items);
+    }
+    if (ok) {
         *status = items->empty() ? kFetchEmpty : kFetchOk;
     } else {
         ESP_LOGW(TAG, "item search failed for \"%s\"", fetch->query.c_str());
@@ -642,7 +668,12 @@ void MediaMode::FetchFilesTask(void* arg) {
     auto files = std::make_shared<std::vector<MediaFile>>();
     auto status = std::make_shared<int>(kFetchError);
     ArchiveClient client;
-    if (client.ListFiles(fetch->identifier, *files)) {
+    bool ok = client.ListFiles(fetch->identifier, *files);
+    if (!ok) {
+        vTaskDelay(pdMS_TO_TICKS(4000));
+        ok = client.ListFiles(fetch->identifier, *files);
+    }
+    if (ok) {
         *status = files->empty() ? kFetchEmpty : kFetchOk;
     } else {
         ESP_LOGW(TAG, "file listing failed for %s", fetch->identifier.c_str());
@@ -676,7 +707,12 @@ void MediaMode::FetchStationsTask(void* arg) {
     auto stations = std::make_shared<std::vector<MediaTrack>>();
     auto status = std::make_shared<int>(kFetchError);
     RadioClient client;
-    if (client.Search(fetch->query, 20, *stations)) {
+    bool ok = client.Search(fetch->query, 20, *stations);
+    if (!ok) {
+        vTaskDelay(pdMS_TO_TICKS(4000));
+        ok = client.Search(fetch->query, 20, *stations);
+    }
+    if (ok) {
         *status = stations->empty() ? kFetchEmpty : kFetchOk;
     } else {
         ESP_LOGW(TAG, "station search failed for \"%s\"", fetch->query.c_str());
@@ -718,6 +754,7 @@ void MediaMode::PlayTrack(const MediaTrack& track) {
     if (played_.size() > 16) {
         played_.pop_back();
     }
+    SaveHistory();
     state_ = State::kPlaying;
     player_->Play(track);
     ShowNowPlaying();
@@ -798,4 +835,90 @@ void MediaMode::OnPlayerEvent(MusicPlayer::Event event, const MediaTrack& track,
         default:
             break;
     }
+}
+void MediaMode::SaveHistory() {
+    cJSON* root = cJSON_CreateObject();
+    cJSON* q = cJSON_CreateArray();
+    for (const auto& item : history_) {
+        cJSON_AddItemToArray(q, cJSON_CreateString(item.c_str()));
+    }
+    cJSON_AddItemToObject(root, "queries", q);
+    cJSON* t = cJSON_CreateArray();
+    for (const auto& tr : played_) {
+        cJSON* o = cJSON_CreateObject();
+        cJSON_AddStringToObject(o, "title", tr.title.c_str());
+        cJSON_AddStringToObject(o, "url", tr.url.c_str());
+        cJSON_AddStringToObject(o, "artist", tr.artist.c_str());
+        cJSON_AddNumberToObject(o, "duration", tr.duration_sec);
+        cJSON_AddBoolToObject(o, "stream", tr.is_stream);
+        cJSON_AddItemToArray(t, o);
+    }
+    cJSON_AddItemToObject(root, "tracks", t);
+    char* json = cJSON_PrintUnformatted(root);
+    cJSON_Delete(root);
+    if (json == nullptr) {
+        return;
+    }
+    nvs_handle_t h;
+    if (nvs_open("media", NVS_READWRITE, &h) == ESP_OK) {
+        nvs_set_str(h, "history", json);
+        nvs_commit(h);
+        nvs_close(h);
+    }
+    free(json);
+}
+
+void MediaMode::LoadHistory() {
+    nvs_handle_t h;
+    if (nvs_open("media", NVS_READONLY, &h) != ESP_OK) {
+        return;
+    }
+    size_t len = 0;
+    if (nvs_get_str(h, "history", nullptr, &len) != ESP_OK || len == 0 || len > 8192) {
+        nvs_close(h);
+        return;
+    }
+    std::string buf(len, '\0');
+    if (nvs_get_str(h, "history", buf.data(), &len) != ESP_OK) {
+        nvs_close(h);
+        return;
+    }
+    nvs_close(h);
+    cJSON* root = cJSON_Parse(buf.c_str());
+    if (root == nullptr) {
+        return;
+    }
+    cJSON* q = cJSON_GetObjectItem(root, "queries");
+    if (cJSON_IsArray(q)) {
+        cJSON* it = nullptr;
+        cJSON_ArrayForEach(it, q) {
+            if (cJSON_IsString(it) && history_.size() < 8) {
+                history_.push_back(it->valuestring);
+            }
+        }
+    }
+    cJSON* t = cJSON_GetObjectItem(root, "tracks");
+    if (cJSON_IsArray(t)) {
+        cJSON* it = nullptr;
+        cJSON_ArrayForEach(it, t) {
+            if (!cJSON_IsObject(it) || played_.size() >= 16) {
+                continue;
+            }
+            MediaTrack tr;
+            cJSON* v = cJSON_GetObjectItem(it, "title");
+            if (cJSON_IsString(v)) tr.title = v->valuestring;
+            v = cJSON_GetObjectItem(it, "url");
+            if (cJSON_IsString(v)) tr.url = v->valuestring;
+            v = cJSON_GetObjectItem(it, "artist");
+            if (cJSON_IsString(v)) tr.artist = v->valuestring;
+            v = cJSON_GetObjectItem(it, "duration");
+            if (cJSON_IsNumber(v)) tr.duration_sec = v->valueint;
+            v = cJSON_GetObjectItem(it, "stream");
+            tr.is_stream = cJSON_IsTrue(v);
+            if (!tr.url.empty()) {
+                played_.push_back(std::move(tr));
+            }
+        }
+    }
+    cJSON_Delete(root);
 }

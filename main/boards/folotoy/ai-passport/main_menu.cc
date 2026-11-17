@@ -32,9 +32,11 @@ void MainMenu::Open(std::vector<Item> items) {
         lv_obj_clear_flag(panel_, LV_OBJ_FLAG_HIDDEN);
     }
 
-    // (Re)build rows: the item set can change between opens (e.g. the theme
-    // row reflects the current theme).
+    // (Re)build rows: the item set can change between opens. Note that
+    // lv_obj_clean(list_) also deletes the cursor child, so drop our pointer
+    // and recreate it below.
     lv_obj_clean(list_);
+    cursor_ = nullptr;
     row_.clear();
     row_icon_.clear();
     row_text_.clear();
@@ -155,7 +157,7 @@ void MainMenu::OnTimer(lv_timer_t* timer) {
 }
 
 void MainMenu::Animate() {
-    if (cursor_ == nullptr || row_.empty()) {
+    if (cursor_ == nullptr || !lv_obj_is_valid(cursor_) || row_.empty() || !open_) {
         return;
     }
     // Ease the cursor toward its target row (40% per frame).
@@ -214,6 +216,22 @@ void MainMenu::UpdateSelection() {
     }
     lv_obj_scroll_to_view(row_[selected_], LV_ANIM_ON);
     // Slide the animated cursor toward the newly highlighted row.
+    if (cursor_ == nullptr || !lv_obj_is_valid(cursor_)) {
+        auto* theme2 = ThemeOf(display_);
+        cursor_ = lv_obj_create(list_);
+        lv_obj_set_size(cursor_, 5, 34);
+        lv_obj_set_x(cursor_, 1);
+        lv_obj_set_style_radius(cursor_, 2, 0);
+        if (theme2 != nullptr) {
+            lv_obj_set_style_bg_color(cursor_, theme2->text_color(), 0);
+        }
+        lv_obj_set_style_bg_opa(cursor_, LV_OPA_70, 0);
+        lv_obj_set_style_border_width(cursor_, 0, 0);
+        lv_obj_set_style_pad_all(cursor_, 0, 0);
+        lv_obj_clear_flag(cursor_, LV_OBJ_FLAG_SCROLLABLE);
+        lv_obj_move_background(cursor_);
+        cursor_snap_ = true;
+    }
     cursor_target_ = lv_obj_get_y(row_[selected_]);
     if (cursor_snap_) {
         // First selection after a rebuild: snap instead of sliding in.

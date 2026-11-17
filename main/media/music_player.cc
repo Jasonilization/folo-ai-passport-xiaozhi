@@ -10,6 +10,7 @@
 #include <esp_http_client.h>
 #include <esp_log.h>
 
+#include <atomic>
 #include <cstring>
 #include <vector>
 
@@ -47,8 +48,14 @@ esp_audio_type_t TypeFromUrl(const std::string& url) {
 }
 
 esp_err_t HttpEventHandler(esp_http_client_event_t* evt) {
-    if (evt->event_id == HTTP_EVENT_ERROR || evt->event_id == HTTP_EVENT_DISCONNECTED) {
+    if (evt->event_id == HTTP_EVENT_ERROR || evt->event_id == HTTP_EVENT_DISCONNECTED ||
+        evt->event_id == HTTP_EVENT_DISCONNECTED) {
         ESP_LOGW(TAG, "http event %d", evt->event_id);
+        // Peer already closed: remember it so Cleanup() does not call
+        // esp_http_client_close() on a dead connection (double pbuf free).
+        if (evt->user_data != nullptr) {
+            *static_cast<std::atomic<bool>*>(evt->user_data) = true;
+        }
     }
     return ESP_OK;
 }
@@ -165,7 +172,7 @@ void MusicPlayer::RunImpl() {
         config.timeout_ms = 3000;
         config.event_handler = HttpEventHandler;
         config.buffer_size = 4096;
-        config.user_data = this;
+        config.user_data = &saw_disconnect_;
         config.crt_bundle_attach = esp_crt_bundle_attach;
         client = esp_http_client_init(&config);
         // Note: fetch_headers returns the content length, which is -1/0 for
@@ -182,7 +189,9 @@ void MusicPlayer::RunImpl() {
         status = esp_http_client_get_status_code(client);
         if (status >= 300 && status < 400) {
             char* loc = nullptr;
-            if (esp_http_client_get_header(client, "Location", &loc) == ESP_OK && loc != nullptr) {
+            // Response headers need SAVE_RESPONSE_HEADERS; get_header() reads
+            // request headers and would never find Location.
+            if (esp_http_client_get_response_header(client, "Location", &loc) == ESP_OK && loc != nullptr) {
                 std::string next = loc;
                 free(loc);
                 if (next.rfind("http", 0) != 0) {
@@ -354,10 +363,14 @@ void MusicPlayer::Cleanup() {
         decoder_ = nullptr;
     }
     if (http_ != nullptr) {
-        esp_http_client_close(static_cast<esp_http_client_handle_t>(http_));
-        esp_http_client_cleanup(static_cast<esp_http_client_handle_t>(http_));
+        auto client = static_cast<esp_http_client_handle_t>(http_);
+        if (!saw_disconnect_) {
+            esp_http_client_close(client);
+        }
+        esp_http_client_cleanup(client);
         http_ = nullptr;
     }
+    saw_disconnect_ = false;
     playing_ = false;
 }
 
