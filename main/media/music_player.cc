@@ -9,6 +9,7 @@
 #include <esp_heap_caps.h>
 #include <esp_http_client.h>
 #include <esp_log.h>
+#include <netdb.h>
 
 #include <atomic>
 #include <cstring>
@@ -149,6 +150,14 @@ void MusicPlayer::Run() {
 }
 
 void MusicPlayer::RunImpl() {
+    // A TLS handshake needs ~25KB+ free; below that it corrupts lwIP/heap on
+    // the C3, so refuse cleanly instead of crashing the device.
+    if (esp_get_free_heap_size() < 45000) {
+        ESP_LOGW(TAG, "not enough heap for playback (%u), refusing",
+                 (unsigned)esp_get_free_heap_size());
+        Emit(Event::kError, ESP_AUDIO_ERR_MEM_LACK);
+        return;
+    }
     if (codec_ == nullptr) {
         Emit(Event::kError, ESP_AUDIO_ERR_FAIL);
         return;
@@ -167,49 +176,75 @@ void MusicPlayer::RunImpl() {
     std::string url = current_.url;
     esp_http_client_handle_t client = nullptr;
     int status = 0;
-    for (int hop = 0; hop < 5; hop++) {
-        esp_http_client_config_t config = {};
-        config.url = url.c_str();
-        config.timeout_ms = 3000;
-        config.event_handler = HttpEventHandler;
-        config.buffer_size = 4096;
-        config.user_data = &saw_disconnect_;
-        config.crt_bundle_attach = esp_crt_bundle_attach;
-        client = esp_http_client_init(&config);
-        // Note: fetch_headers returns the content length, which is -1/0 for
-        // chunked radio streams - that is NOT an error, so don't check it.
-        if (client == nullptr || esp_http_client_open(client, 0) != ESP_OK) {
-            ESP_LOGE(TAG, "http open failed for %s", url.c_str());
-            if (client != nullptr) {
-                esp_http_client_cleanup(client);
+    // DNS on this link intermittently fails (getaddrinfo 202); warm the lwIP
+    // resolver cache with retries before each connect attempt, and retry the
+    // whole open a few times.
+    auto warm_dns = [](const std::string& u) {
+        std::string host = u;
+        size_t scheme = host.find("://");
+        if (scheme != std::string::npos) host = host.substr(scheme + 3);
+        size_t slash = host.find('/');
+        if (slash != std::string::npos) host = host.substr(0, slash);
+        for (int i = 0; i < 6; i++) {
+            struct addrinfo hints = {};
+            hints.ai_family = AF_INET;
+            hints.ai_socktype = SOCK_STREAM;
+            struct addrinfo* res = nullptr;
+            if (getaddrinfo(host.c_str(), nullptr, &hints, &res) == 0) {
+                if (res != nullptr) freeaddrinfo(res);
+                return;
             }
-            Emit(Event::kError, ESP_AUDIO_ERR_FAIL);
-            return;
+            vTaskDelay(pdMS_TO_TICKS(2000));
         }
-        esp_http_client_fetch_headers(client);  // populates status/headers
-        status = esp_http_client_get_status_code(client);
-        if (status >= 300 && status < 400) {
-            char* loc = nullptr;
-            // Response headers need SAVE_RESPONSE_HEADERS; get_header() reads
-            // request headers and would never find Location.
-            if (esp_http_client_get_response_header(client, "Location", &loc) == ESP_OK && loc != nullptr) {
-                std::string next = loc;
-                free(loc);
-                if (next.rfind("http", 0) != 0) {
-                    // Relative redirect: rebuild against the current host.
-                    size_t scheme = url.find("://");
-                    size_t slash = url.find('/', scheme + 3);
-                    std::string base = (slash == std::string::npos) ? url : url.substr(0, slash);
-                    next = base + (next.empty() || next[0] != '/' ? "/" : "") + next;
+    };
+    for (int attempt = 0; attempt < 3 && (client == nullptr || status != 200); attempt++) {
+        if (attempt > 0) vTaskDelay(pdMS_TO_TICKS(3000));
+        warm_dns(url);
+        for (int hop = 0; hop < 5; hop++) {
+            esp_http_client_config_t config = {};
+            config.url = url.c_str();
+            config.timeout_ms = 3000;
+            config.event_handler = HttpEventHandler;
+            config.buffer_size = 4096;
+            config.user_data = &saw_disconnect_;
+            config.crt_bundle_attach = esp_crt_bundle_attach;
+            client = esp_http_client_init(&config);
+            // fetch_headers returns content length (-1/0 for chunked radio
+            // streams is NOT an error, so don't check it).
+            if (client == nullptr || esp_http_client_open(client, 0) != ESP_OK) {
+                ESP_LOGW(TAG, "http open failed for %s", url.c_str());
+                if (client != nullptr) {
+                    esp_http_client_cleanup(client);
+                    client = nullptr;
                 }
-                url = std::move(next);
-                esp_http_client_close(client);
-                esp_http_client_cleanup(client);
-                client = nullptr;
-                continue;
+                break;  // next attempt
             }
+            esp_http_client_fetch_headers(client);
+            status = esp_http_client_get_status_code(client);
+            if (status >= 300 && status < 400) {
+                char* loc = nullptr;
+                // Response headers need SAVE_RESPONSE_HEADERS; get_header()
+                // reads request headers and would never find Location.
+                if (esp_http_client_get_response_header(client, "Location", &loc) == ESP_OK &&
+                    loc != nullptr) {
+                    std::string next = loc;
+                    free(loc);
+                    if (next.rfind("http", 0) != 0) {
+                        size_t scheme = url.find("://");
+                        size_t slash = url.find('/', scheme + 3);
+                        std::string base =
+                            (slash == std::string::npos) ? url : url.substr(0, slash);
+                        next = base + (next.empty() || next[0] != '/' ? "/" : "") + next;
+                    }
+                    url = std::move(next);
+                    esp_http_client_close(client);
+                    esp_http_client_cleanup(client);
+                    client = nullptr;
+                    continue;  // next hop
+                }
+            }
+            break;  // got a non-redirect response
         }
-        break;
     }
     if (client == nullptr || status != 200) {
         ESP_LOGE(TAG, "http status %d for %s", status, url.c_str());
