@@ -227,8 +227,9 @@ void MusicPlayer::RunImpl() {
                 // reads request headers and would never find Location.
                 if (esp_http_client_get_response_header(client, "Location", &loc) == ESP_OK &&
                     loc != nullptr) {
+                    // NOTE: loc points into the client's internal header
+                    // storage - must NOT be freed (that corrupted the heap).
                     std::string next = loc;
-                    free(loc);
                     if (next.rfind("http", 0) != 0) {
                         size_t scheme = url.find("://");
                         size_t slash = url.find('/', scheme + 3);
