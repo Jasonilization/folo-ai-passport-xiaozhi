@@ -602,7 +602,7 @@ void MediaMode::StartVoiceSearch() {
     xTaskCreate(
         [](void* arg) {
             auto* self = static_cast<MediaMode*>(arg);
-            vTaskDelay(pdMS_TO_TICKS(20000));
+            vTaskDelay(pdMS_TO_TICKS(30000));
             Application::GetInstance().Schedule([self]() { self->VoiceSearchTimeout(); });
             vTaskDelete(nullptr);
         },
@@ -620,7 +620,13 @@ void MediaMode::VoiceSearchTimeout() {
 }
 
 void MediaMode::OnSttText(const std::string& text) {
-    if (!voice_search_pending_ || !open_ || text.empty()) {
+    if (!voice_search_pending_ || !open_) {
+        return;
+    }
+    if (text.empty()) {
+        // Server sometimes sends an empty STT right after the channel opens;
+        // keep listening instead of giving up.
+        ESP_LOGI(TAG, "empty STT, still listening for a song...");
         return;
     }
     voice_search_pending_ = false;

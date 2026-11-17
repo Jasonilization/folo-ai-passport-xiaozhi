@@ -103,6 +103,19 @@ bool HttpGet(const std::string& url, HttpResponse& resp, size_t cap = 24 * 1024,
     }
     esp_err_t err = esp_http_client_perform(client);
     int status = esp_http_client_get_status_code(client);
+    if (err != ESP_OK && status <= 0) {
+        // transient DNS/TCP failure: one retry after a short wait
+        esp_http_client_cleanup(client);
+        vTaskDelay(pdMS_TO_TICKS(2000));
+        client = esp_http_client_init(&config);
+        if (range != nullptr) {
+            esp_http_client_set_header(client, "Range", range);
+        }
+        if (client != nullptr) {
+            err = esp_http_client_perform(client);
+            status = esp_http_client_get_status_code(client);
+        }
+    }
     esp_http_client_cleanup(client);
     resp.data[resp.len] = '\0';
     if (err != ESP_OK || (status != 200 && status != 206)) {

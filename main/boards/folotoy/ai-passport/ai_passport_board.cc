@@ -24,6 +24,8 @@
 #include <freertos/task.h>
 #include <esp_netif.h>
 #include <esp_netif_sntp.h>
+#include <esp_netif.h>
+#include <cstring>
 #include <nvs_flash.h>
 #include <lvgl.h>
 #include <atomic>
@@ -47,6 +49,28 @@ static void SntpInitTask(void* arg) {
     opts.sync_cb = nullptr;
     esp_netif_sntp_init(&opts);
     ESP_LOGI(TAG, "SNTP sync started (pool.ntp.org)");
+
+    // Pin public DNS servers on the STA interface: the DHCP-provided resolver
+    // intermittently fails (getaddrinfo error 202), which killed all HTTPS
+    // fetches. Retry until the interface is up.
+    esp_netif_t* sta = esp_netif_get_handle_from_ifkey("WIFI_STA_DEF");
+    if (sta != nullptr) {
+        for (int i = 0; i < 30; i++) {
+            esp_netif_dns_info_t dns;
+            memset(&dns, 0, sizeof(dns));
+            dns.ip.type = ESP_IPADDR_TYPE_V4;
+            dns.ip.u_addr.ip4.addr = esp_ip4addr_aton("8.8.8.8");
+            if (esp_netif_set_dns_info(sta, ESP_NETIF_DNS_MAIN, &dns) == ESP_OK) {
+                memset(&dns, 0, sizeof(dns));
+                dns.ip.type = ESP_IPADDR_TYPE_V4;
+                dns.ip.u_addr.ip4.addr = esp_ip4addr_aton("1.1.1.1");
+                esp_netif_set_dns_info(sta, ESP_NETIF_DNS_BACKUP, &dns);
+                ESP_LOGI(TAG, "DNS pinned to 8.8.8.8 / 1.1.1.1");
+                break;
+            }
+            vTaskDelay(pdMS_TO_TICKS(2000));
+        }
+    }
     vTaskDelete(nullptr);
 }
 
@@ -513,8 +537,10 @@ private:
         const bool swap_xy = DISPLAY_SWAP_XY != landscape_;
         // Rotating 90 deg also needs both mirrors flipped, otherwise the
         // landscape image comes out upside down.
+        // swap_xy rotates 90 deg; flipping only mirror_x corrects the upside-
+        // down orientation (flipping both would add a 180 deg turn).
         const bool mirror_x = DISPLAY_MIRROR_X != landscape_;
-        const bool mirror_y = DISPLAY_MIRROR_Y != landscape_;
+        const bool mirror_y = DISPLAY_MIRROR_Y;
         esp_lcd_panel_invert_color(panel, DISPLAY_INVERT_COLOR);
         esp_lcd_panel_set_gap(panel, DISPLAY_OFFSET_X, DISPLAY_OFFSET_Y);
         esp_lcd_panel_swap_xy(panel, swap_xy);
