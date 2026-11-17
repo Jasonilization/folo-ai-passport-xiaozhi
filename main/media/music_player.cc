@@ -286,12 +286,15 @@ void MusicPlayer::RunImpl() {
     int64_t content_length = esp_http_client_get_content_length(client);
     int64_t total_read = 0;
     int64_t last_emit = -2000;
+    int64_t last_read = 0;
     bool started = false;
     esp_err_t last_ok = ESP_OK;
 
     while (!stop_) {
         if (paused_) {
-            vTaskDelay(pdMS_TO_TICKS(50));
+            // Just stop feeding the decoder; keep the HTTP connection and the
+            // codec untouched so resume is instant and crash-free.
+            vTaskDelay(pdMS_TO_TICKS(100));
             continue;
         }
 
@@ -377,6 +380,10 @@ void MusicPlayer::RunImpl() {
             int64_t position_ms = total_read * 8 / 256;
             if (position_ms - last_emit > 1000) {
                 last_emit = position_ms;
+                int64_t kbps = (total_read - last_read) / 1024;
+                last_read = total_read;
+                ESP_LOGI(TAG, "stream %lld KB total, ~%lld KB/s", (long long)(total_read / 1024),
+                         (long long)kbps);
                 Emit(Event::kProgress, (int)position_ms);
             }
         }

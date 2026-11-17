@@ -208,6 +208,8 @@ bool ArchiveClient::ListFilesImpl(const std::string& identifier, std::vector<Med
     // well over 200KB, which will never fit the C3 heap in one buffer. We only
     // keep the audio file entries we find (bounded), never the whole document.
     const std::string url = "http://archive.org/metadata/" + identifier;
+    std::string cdn_host;  // d1
+    std::string item_dir;  // dir, e.g. /22/items/fallen-down
 
     esp_http_client_config_t config = {};
     config.url = url.c_str();
@@ -284,7 +286,13 @@ bool ArchiveClient::ListFilesImpl(const std::string& identifier, std::vector<Med
     };
     auto try_emit = [&](MediaFile& mf) {
         if (classify(mf)) {
-            mf.url = "https://archive.org/download/" + identifier + "/" + UrlEncode(mf.name);
+            // Direct CDN URL (https://<d1><dir>/<name>) avoids the flaky
+            // archive.org redirect chain. Fall back to /download/ otherwise.
+            if (!cdn_host.empty() && !item_dir.empty()) {
+                mf.url = "https://" + cdn_host + item_dir + "/" + UrlEncode(mf.name);
+            } else {
+                mf.url = "https://archive.org/download/" + identifier + "/" + UrlEncode(mf.name);
+            }
             out.push_back(std::move(mf));
         }
     };
@@ -317,6 +325,21 @@ bool ArchiveClient::ListFilesImpl(const std::string& identifier, std::vector<Med
         }
         const char* base = window.c_str();
         if (!in_files) {
+            // capture d1/dir from the document head (before "files")
+            const char* d1 = strstr(base, "\"d1\"");
+            if (d1) {
+                const char* c = strchr(d1, ':');
+                const char* q = c ? c + 1 : d1;
+                while (*q == ' ') q++;
+                read_json_string(q, cdn_host);
+            }
+            const char* dr = strstr(base, "\"dir\"");
+            if (dr) {
+                const char* c = strchr(dr, ':');
+                const char* q = c ? c + 1 : dr;
+                while (*q == ' ') q++;
+                read_json_string(q, item_dir);
+            }
             const char* f = strstr(base, "\"files\"");
             if (f) {
                 in_files = true;

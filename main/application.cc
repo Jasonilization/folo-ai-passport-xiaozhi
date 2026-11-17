@@ -561,6 +561,11 @@ void Application::CheckNewVersion() {
 }
 
 void Application::InitializeProtocol() {
+    if (!ota_) {
+        // Ota is created during activation; if media mode is closed before
+        // activation finished, just create a bare one.
+        ota_ = std::make_unique<Ota>();
+    }
     auto& board = Board::GetInstance();
     auto display = board.GetDisplay();
     auto codec = board.GetAudioCodec();
