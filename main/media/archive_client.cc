@@ -242,7 +242,7 @@ bool ArchiveClient::ListFilesImpl(const std::string& identifier, std::vector<Med
 
     constexpr size_t kChunk = 8 * 1024;
     constexpr size_t kCarry = 512;      // overlap so patterns split across chunks survive
-    constexpr size_t kMaxFiles = 60;     // bound memory
+    constexpr size_t kMaxFiles = 24;     // bound memory
     char* chunk = static_cast<char*>(malloc(kChunk));
     if (chunk == nullptr) {
         ESP_LOGW(TAG, "metadata chunk malloc failed, heap=%u", (unsigned)esp_get_free_heap_size());
