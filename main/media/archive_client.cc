@@ -284,7 +284,7 @@ bool ArchiveClient::ListFilesImpl(const std::string& identifier, std::vector<Med
     };
     auto try_emit = [&](MediaFile& mf) {
         if (classify(mf)) {
-            mf.url = "http://archive.org/download/" + identifier + "/" + UrlEncode(mf.name);
+            mf.url = "https://archive.org/download/" + identifier + "/" + UrlEncode(mf.name);
             out.push_back(std::move(mf));
         }
     };
