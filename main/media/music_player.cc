@@ -203,7 +203,7 @@ void MusicPlayer::RunImpl() {
         for (int hop = 0; hop < 5; hop++) {
             esp_http_client_config_t config = {};
             config.url = url.c_str();
-            config.timeout_ms = 3000;
+            config.timeout_ms = 15000;
             config.event_handler = HttpEventHandler;
             config.buffer_size = 4096;
             config.user_data = &saw_disconnect_;
