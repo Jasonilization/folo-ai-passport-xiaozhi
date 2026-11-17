@@ -26,8 +26,8 @@
 
 namespace {
 
-constexpr size_t kInBufSize = 32 * 1024;
-constexpr uint32_t kOutBufSize = 16 * 1024;
+constexpr size_t kInBufSize = 16 * 1024;
+constexpr uint32_t kOutBufSize = 8 * 1024;
 
 esp_audio_type_t TypeFromUrl(const std::string& url) {
     std::string lower;
@@ -150,11 +150,25 @@ void MusicPlayer::Run() {
 }
 
 void MusicPlayer::RunImpl() {
+    // Allocate the stream buffers FIRST, while the heap is still full; doing
+    // it after the TLS handshake (which eats ~30KB) makes malloc fail/hang.
+    uint8_t* in = static_cast<uint8_t*>(malloc(kInBufSize));
+    uint8_t* out = static_cast<uint8_t*>(malloc(kOutBufSize));
+    if (in == nullptr || out == nullptr) {
+        ESP_LOGW(TAG, "buffer alloc failed in=%p out=%p heap=%u", in, out,
+                 (unsigned)esp_get_free_heap_size());
+        free(in);
+        free(out);
+        Emit(Event::kError, ESP_AUDIO_ERR_MEM_LACK);
+        return;
+    }
     // A TLS handshake needs ~25KB+ free; below that it corrupts lwIP/heap on
     // the C3, so refuse cleanly instead of crashing the device.
     if (esp_get_free_heap_size() < 45000) {
         ESP_LOGW(TAG, "not enough heap for playback (%u), refusing",
                  (unsigned)esp_get_free_heap_size());
+        free(in);
+        free(out);
         Emit(Event::kError, ESP_AUDIO_ERR_MEM_LACK);
         return;
     }
@@ -267,7 +281,10 @@ void MusicPlayer::RunImpl() {
     dec_cfg.cfg = nullptr;
     dec_cfg.cfg_sz = 0;
     ESP_LOGI(TAG, "stage: opening decoder type=%d", (int)type);
-    if (esp_audio_dec_open(&dec_cfg, &decoder_) != ESP_AUDIO_ERR_OK) {
+    esp_audio_err_t derr = esp_audio_dec_open(&dec_cfg, &decoder_);
+    ESP_LOGI(TAG, "stage: decoder open ret=%d handle=%p heap=%u", (int)derr, decoder_,
+             (unsigned)esp_get_free_heap_size());
+    if (derr != ESP_AUDIO_ERR_OK) {
         ESP_LOGE(TAG, "decoder open failed");
         Cleanup();
         Emit(Event::kError, ESP_AUDIO_ERR_FAIL);
@@ -275,18 +292,8 @@ void MusicPlayer::RunImpl() {
     }
 
     codec_->EnableOutput(true);
+    ESP_LOGI(TAG, "stage: output enabled");
 
-    // malloc'd buffers only: C++ exceptions are disabled in this build, so a
-    // throwing vector allocation under heap pressure would abort the device.
-    uint8_t* in = static_cast<uint8_t*>(malloc(kInBufSize));
-    uint8_t* out = static_cast<uint8_t*>(malloc(kOutBufSize));
-    if (in == nullptr || out == nullptr) {
-        free(in);
-        free(out);
-        Cleanup();
-        Emit(Event::kError, ESP_AUDIO_ERR_MEM_LACK);
-        return;
-    }
     size_t in_len = 0, in_pos = 0;
     bool eof = false;
     int64_t content_length = esp_http_client_get_content_length(client);
@@ -296,6 +303,7 @@ void MusicPlayer::RunImpl() {
     bool started = false;
     esp_err_t last_ok = ESP_OK;
 
+    ESP_LOGI(TAG, "stage: entering read loop");
     while (!stop_) {
         if (paused_) {
             // Just stop feeding the decoder; keep the HTTP connection and the
@@ -312,8 +320,11 @@ void MusicPlayer::RunImpl() {
         if (in_len < kInBufSize / 2 && !eof) {
             int r = esp_http_client_read(client, reinterpret_cast<char*>(in + in_len),
                                          kInBufSize - in_len);
-            if (r != 0 && total_read + r < 2048) {
-                ESP_LOGI(TAG, "stage: first read r=%d", r);
+            static int read_log = 0;
+            if (read_log < 5) {
+                ESP_LOGI(TAG, "stage: read r=%d (total=%lld eof=%d)", r,
+                         (long long)total_read, (int)eof);
+                read_log++;
             }
             if (r > 0) {
                 in_len += r;
