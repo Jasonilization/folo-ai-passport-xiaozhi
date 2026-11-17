@@ -256,11 +256,13 @@ void MusicPlayer::RunImpl() {
         return;
     }
     http_ = client;
+    ESP_LOGI(TAG, "stage: connected %s status=%d", url.c_str(), status);
 
     esp_audio_dec_cfg_t dec_cfg = {};
     dec_cfg.type = type;
     dec_cfg.cfg = nullptr;
     dec_cfg.cfg_sz = 0;
+    ESP_LOGI(TAG, "stage: opening decoder type=%d", (int)type);
     if (esp_audio_dec_open(&dec_cfg, &decoder_) != ESP_AUDIO_ERR_OK) {
         ESP_LOGE(TAG, "decoder open failed");
         Cleanup();
@@ -332,6 +334,9 @@ void MusicPlayer::RunImpl() {
         frame.decoded_size = 0;
 
         esp_audio_err_t err = esp_audio_dec_process(decoder_, &raw, &frame);
+        if (frame.decoded_size > 0 && total_read < 1) {
+            ESP_LOGI(TAG, "stage: first decoded frame %u bytes", frame.decoded_size);
+        }
         if (frame.decoded_size > 0) {
             esp_audio_dec_info_t info = {};
             if (esp_audio_dec_get_info(decoder_, &info) == ESP_AUDIO_ERR_OK) {
@@ -351,12 +356,13 @@ void MusicPlayer::RunImpl() {
             if (eof) {
                 break;
             }
-            if (raw.consumed == 0 && frame.decoded_size == 0 && in_len - in_pos == 0) {
-                break;
-            }
-            if (raw.consumed == 0 && frame.decoded_size == 0) {
-                // Nothing progressed: skip a byte so we can't spin forever.
-                in_pos = in_len;
+            // Decoder wants more data: KEEP the buffered input (dropping it
+            // starves the decoder forever). Only if the buffer is completely
+            // full and nothing was consumed do we drop one byte to force
+            // progress.
+            if (raw.consumed == 0 && frame.decoded_size == 0 &&
+                in_len - in_pos >= kInBufSize) {
+                in_pos += 1;
             }
             continue;
         }
@@ -367,9 +373,9 @@ void MusicPlayer::RunImpl() {
             continue;
         }
         if (err == ESP_AUDIO_ERR_FAIL || err == ESP_AUDIO_ERR_NOT_SUPPORT) {
-            // Skip this frame; keep going, decoders often recover on the next
-            // syncword after a corrupt chunk.
-            in_pos = in_len;
+            // Desync: drop one byte so the decoder can resync on the next
+            // frame syncword (dropping everything would stall forever).
+            in_pos += 1;
             if (last_ok == ESP_OK && err == ESP_AUDIO_ERR_NOT_SUPPORT) {
                 last_ok = err;
             }
