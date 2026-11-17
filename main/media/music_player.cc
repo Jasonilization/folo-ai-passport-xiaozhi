@@ -106,15 +106,16 @@ void MusicPlayer::Stop() {
     // Do NOT close http_ from here: the playback task may be blocked inside
     // esp_http_client_read on it. It has a short read timeout and checks
     // stop_ every loop, so it exits on its own.
+    // Wait for the task to exit on its own (read timeout is 3 s, so this
+    // converges). NEVER vTaskDelete it here: killing a task mid-DNS/TLS leaves
+    // lwIP callbacks on freed memory and crashes the core.
     int wait = 0;
-    while (task_ != nullptr && wait < 250) {
+    while (task_ != nullptr && wait < 600) {
         vTaskDelay(pdMS_TO_TICKS(20));
         wait += 20;
     }
     if (task_ != nullptr) {
-        ESP_LOGW(TAG, "playback task did not exit, forcing delete");
-        vTaskDelete(static_cast<TaskHandle_t>(task_));
-        task_ = nullptr;
+        ESP_LOGW(TAG, "playback task still running; leaving it (leak > crash)");
     }
     stop_ = false;
     paused_ = false;

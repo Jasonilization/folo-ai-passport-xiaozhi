@@ -615,6 +615,13 @@ public:
             if (media_ == nullptr) {
                 media_ = std::make_unique<MediaMode>(display_, GetAudioCodec());
             }
+            // Free the audio channel's heap BEFORE fetching: schedule the
+            // close, then wait for it to run (it is itself scheduled on the
+            // main task, which is where this lambda runs).
+            Application::GetInstance().CloseAudioChannel();
+            vTaskDelay(pdMS_TO_TICKS(3000));
+            ESP_LOGI(TAG, "mt %s: heap before fetch=%u", sub.c_str(),
+                     (unsigned)esp_get_free_heap_size());
             if (sub == "search") {
                 media_->DebugSearch(a);
             } else if (sub == "list") {

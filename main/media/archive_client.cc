@@ -101,22 +101,27 @@ bool HttpGet(const std::string& url, HttpResponse& resp, size_t cap = 24 * 1024,
     if (range != nullptr) {
         esp_http_client_set_header(client, "Range", range);
     }
-    esp_err_t err = esp_http_client_perform(client);
-    int status = esp_http_client_get_status_code(client);
-    if (err != ESP_OK && status <= 0) {
-        // transient DNS/TCP failure: one retry after a short wait
-        esp_http_client_cleanup(client);
-        vTaskDelay(pdMS_TO_TICKS(2000));
+    esp_err_t err = ESP_FAIL;
+    int status = 0;
+    // DNS on this link is flaky (getaddrinfo sometimes returns 202), so retry
+    // the whole request a few times with a pause between attempts.
+    for (int attempt = 0; attempt < 4; attempt++) {
         client = esp_http_client_init(&config);
+        if (client == nullptr) break;
         if (range != nullptr) {
             esp_http_client_set_header(client, "Range", range);
         }
-        if (client != nullptr) {
-            err = esp_http_client_perform(client);
-            status = esp_http_client_get_status_code(client);
+        err = esp_http_client_perform(client);
+        status = esp_http_client_get_status_code(client);
+        esp_http_client_cleanup(client);
+        client = nullptr;
+        if (err == ESP_OK && (status == 200 || status == 206)) {
+            break;
+        }
+        if (attempt < 3) {
+            vTaskDelay(pdMS_TO_TICKS(3000));
         }
     }
-    esp_http_client_cleanup(client);
     resp.data[resp.len] = '\0';
     if (err != ESP_OK || (status != 200 && status != 206)) {
         ESP_LOGW(TAG, "GET %s failed (err=%d status=%d len=%u)", url.c_str(), err, status,
@@ -209,10 +214,21 @@ bool ArchiveClient::ListFilesImpl(const std::string& identifier, std::vector<Med
     config.timeout_ms = 10000;
     config.buffer_size = 2048;
     config.crt_bundle_attach = esp_crt_bundle_attach;
-    auto client = esp_http_client_init(&config);
-    if (client == nullptr || esp_http_client_open(client, 0) != ESP_OK) {
+    esp_http_client_handle_t client = nullptr;
+    bool opened = false;
+    for (int attempt = 0; attempt < 4 && !opened; attempt++) {
+        client = esp_http_client_init(&config);
+        if (client == nullptr) break;
+        if (esp_http_client_open(client, 0) == ESP_OK) {
+            opened = true;
+        } else {
+            esp_http_client_cleanup(client);
+            client = nullptr;
+            if (attempt < 3) vTaskDelay(pdMS_TO_TICKS(3000));
+        }
+    }
+    if (!opened) {
         ESP_LOGW(TAG, "metadata open failed for %s", identifier.c_str());
-        if (client != nullptr) esp_http_client_cleanup(client);
         return false;
     }
     esp_http_client_fetch_headers(client);
@@ -224,15 +240,17 @@ bool ArchiveClient::ListFilesImpl(const std::string& identifier, std::vector<Med
         return false;
     }
 
-    constexpr size_t kChunk = 16 * 1024;
-    constexpr size_t kCarry = 1024;      // overlap so patterns split across chunks survive
+    constexpr size_t kChunk = 8 * 1024;
+    constexpr size_t kCarry = 512;      // overlap so patterns split across chunks survive
     constexpr size_t kMaxFiles = 60;     // bound memory
     char* chunk = static_cast<char*>(malloc(kChunk));
     if (chunk == nullptr) {
+        ESP_LOGW(TAG, "metadata chunk malloc failed, heap=%u", (unsigned)esp_get_free_heap_size());
         esp_http_client_close(client);
         esp_http_client_cleanup(client);
         return false;
     }
+    ESP_LOGI(TAG, "metadata stream start, heap=%u", (unsigned)esp_get_free_heap_size());
     std::string window;
     window.reserve(kChunk + kCarry + 1);
     bool in_files = false;
