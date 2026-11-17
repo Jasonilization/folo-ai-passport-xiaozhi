@@ -174,50 +174,45 @@ bool ArchiveClient::ListFiles(const std::string& identifier, std::vector<MediaFi
 
 bool ArchiveClient::ListFilesImpl(const std::string& identifier, std::vector<MediaFile>& out) {
     out.clear();
-    std::string url = "https://archive.org/metadata/" + identifier;
-    HttpResponse resp;
-    // The "files" array sits at the END of the metadata JSON, which for music
-    // collections is far bigger than the C3 heap allows in one shot. So fetch
-    // only the tail via a Range request (206) and scan it tolerantly.
-    size_t cap = 48 * 1024;
-    if (esp_get_free_heap_size() > 160 * 1024) {
-        cap = 96 * 1024;
+    // Stream-scan the metadata JSON in chunks: music items can have metadata
+    // well over 200KB, which will never fit the C3 heap in one buffer. We only
+    // keep the audio file entries we find (bounded), never the whole document.
+    const std::string url = "https://archive.org/metadata/" + identifier;
+
+    esp_http_client_config_t config = {};
+    config.url = url.c_str();
+    config.timeout_ms = 10000;
+    config.buffer_size = 2048;
+    config.crt_bundle_attach = esp_crt_bundle_attach;
+    auto client = esp_http_client_init(&config);
+    if (client == nullptr || esp_http_client_open(client, 0) != ESP_OK) {
+        ESP_LOGW(TAG, "metadata open failed for %s", identifier.c_str());
+        if (client != nullptr) esp_http_client_cleanup(client);
+        return false;
     }
-    char range[32];
-    snprintf(range, sizeof(range), "bytes=-%u", (unsigned)cap);
-    if (!HttpGet(url, resp, cap, range)) {
-        free(resp.data);
+    esp_http_client_fetch_headers(client);
+    if (esp_http_client_get_status_code(client) != 200) {
+        ESP_LOGW(TAG, "metadata status %d for %s",
+                 esp_http_client_get_status_code(client), identifier.c_str());
+        esp_http_client_close(client);
+        esp_http_client_cleanup(client);
         return false;
     }
 
-    // Find the "files" array and scan its entries for name/format/size
-    // without building a full cJSON tree (the tree is what OOMs on big items).
-    const char* files = strstr(resp.data, "\"files\"");
-    if (files == nullptr) {
-        // Tail window missed the files array: retry with the head of the
-        // document (covers small items whose metadata is short).
-        free(resp.data);
-        HttpResponse head;
-        if (!HttpGet(url, head, 24 * 1024)) {
-            free(head.data);
-            return false;
-        }
-        resp.data = head.data;
-        resp.len = head.len;
-        resp.cap = head.cap;
-        files = strstr(resp.data, "\"files\"");
-        if (files == nullptr) {
-            free(resp.data);
-            return true;
-        }
+    constexpr size_t kChunk = 16 * 1024;
+    constexpr size_t kCarry = 1024;      // overlap so patterns split across chunks survive
+    constexpr size_t kMaxFiles = 60;     // bound memory
+    char* chunk = static_cast<char*>(malloc(kChunk));
+    if (chunk == nullptr) {
+        esp_http_client_close(client);
+        esp_http_client_cleanup(client);
+        return false;
     }
-    const char* p = strchr(files, '[');
-    if (p == nullptr) {
-        free(resp.data);
-        return true;
-    }
+    std::string window;
+    window.reserve(kChunk + kCarry + 1);
+    bool in_files = false;
+    std::string pending_name;  // a name whose format/size may be in the next chunk
     auto read_json_string = [](const char*& q, std::string& out_str) -> bool {
-        // q points at the opening quote of a JSON string value
         if (*q != '"') return false;
         q++;
         out_str.clear();
@@ -233,45 +228,103 @@ bool ArchiveClient::ListFilesImpl(const std::string& identifier, std::vector<Med
         if (*q == '"') { q++; return true; }
         return false;
     };
-    while ((p = strstr(p, "\"name\"")) != nullptr) {
-        const char* colon = strchr(p, ':');
-        if (colon == nullptr) break;
-        const char* q = colon + 1;
-        while (*q == ' ') q++;
-        MediaFile mf;
-        if (!read_json_string(q, mf.name)) break;
-        // look ahead within this object for format/size (bounded window)
-        const char* obj_end = strstr(q, "\"name\"");
-        const char* window_end = obj_end ? obj_end : q + 512;
-        const char* f = strstr(q, "\"format\"");
-        if (f && f < window_end) {
-            const char* fc = strchr(f, ':');
-            const char* fq = fc ? fc + 1 : f;
-            while (*fq == ' ') fq++;
-            read_json_string(fq, mf.format);
-            for (char& c : mf.format) c = (char)tolower((unsigned char)c);
-        }
-        const char* sz = strstr(q, "\"size\"");
-        if (sz && sz < window_end) {
-            mf.size = strtoll(sz + 6, nullptr, 10);
-        }
-        std::string name_l = mf.name;
-        for (char& c : name_l) c = (char)tolower((unsigned char)c);
-        // Playable audio only: mp3, ogg (vorbis), flac. WAV is excluded on
-        // purpose: the bundled decoders have no RIFF/WAV container parser.
-        bool ok = mf.format.find("mp3") != std::string::npos ||
-                  mf.format.find("ogg") != std::string::npos ||
-                  mf.format.find("vorbis") != std::string::npos ||
-                  mf.format.find("flac") != std::string::npos ||
-                  name_l.find(".mp3") != std::string::npos ||
-                  name_l.find(".ogg") != std::string::npos ||
-                  name_l.find(".flac") != std::string::npos;
-        if (ok) {
+    auto classify = [](MediaFile& mf) -> bool {
+        std::string l = mf.format;
+        for (char& c : l) c = (char)tolower((unsigned char)c);
+        std::string nl = mf.name;
+        for (char& c : nl) c = (char)tolower((unsigned char)c);
+        // Playable only: mp3 / ogg / flac (no WAV container decoder bundled).
+        return l.find("mp3") != std::string::npos || l.find("ogg") != std::string::npos ||
+               l.find("vorbis") != std::string::npos || l.find("flac") != std::string::npos ||
+               nl.find(".mp3") != std::string::npos || nl.find(".ogg") != std::string::npos ||
+               nl.find(".flac") != std::string::npos;
+    };
+    auto try_emit = [&](MediaFile& mf) {
+        if (classify(mf)) {
             mf.url = "https://archive.org/download/" + identifier + "/" + UrlEncode(mf.name);
             out.push_back(std::move(mf));
         }
-        p = q;
+    };
+
+    int r = 0;
+    while ((r = esp_http_client_read(client, chunk, kChunk)) != 0 &&
+           out.size() < kMaxFiles) {
+        if (r < 0) {
+            ESP_LOGW(TAG, "metadata read error %d", r);
+            break;
+        }
+        window.assign(chunk, r);
+        if (in_files) {
+            // resolve pending name from previous chunk
+            if (!pending_name.empty()) {
+                MediaFile mf;
+                mf.name = pending_name;
+                const char* f = strstr(window.c_str(), "\"format\"");
+                if (f) {
+                    const char* fc = strchr(f, ':');
+                    const char* fq = fc ? fc + 1 : f;
+                    while (*fq == ' ') fq++;
+                    read_json_string(fq, mf.format);
+                }
+                const char* sz = strstr(window.c_str(), "\"size\"");
+                if (sz) mf.size = strtoll(sz + 6, nullptr, 10);
+                try_emit(mf);
+                pending_name.clear();
+            }
+        }
+        const char* base = window.c_str();
+        if (!in_files) {
+            const char* f = strstr(base, "\"files\"");
+            if (f) {
+                in_files = true;
+                base = strchr(f, '[');
+                if (base == nullptr) break;
+                base++;
+            }
+        }
+        // scan for "name":"..." entries
+        const char* p = base;
+        while ((p = strstr(p, "\"name\"")) != nullptr && out.size() < kMaxFiles) {
+            const char* colon = strchr(p, ':');
+            if (colon == nullptr) break;
+            const char* q = colon + 1;
+            while (*q == ' ') q++;
+            MediaFile mf;
+            if (!read_json_string(q, mf.name)) break;
+            // format/size usually follow within the same object
+            const char* obj_end = strstr(q, "\"name\"");
+            const char* f = strstr(q, "\"format\"");
+            if (f && (!obj_end || f < obj_end)) {
+                const char* fc = strchr(f, ':');
+                const char* fq = fc ? fc + 1 : f;
+                while (*fq == ' ') fq++;
+                read_json_string(fq, mf.format);
+            }
+            const char* sz = strstr(q, "\"size\"");
+            if (sz && (!obj_end || sz < obj_end)) {
+                mf.size = strtoll(sz + 6, nullptr, 10);
+            }
+            if (mf.format.empty()) {
+                // format may be in the next chunk; stash and resolve later
+                pending_name = mf.name;
+            } else {
+                try_emit(mf);
+            }
+            p = q;
+        }
+        // carry the tail for cross-chunk patterns
+        if (window.size() > kCarry) {
+            window = window.substr(window.size() - kCarry);
+        }
     }
-    free(resp.data);
+    free(chunk);
+    esp_http_client_close(client);
+    esp_http_client_cleanup(client);
+    if (!pending_name.empty()) {
+        // unresolved tail entry; classify by extension alone
+        MediaFile mf;
+        mf.name = pending_name;
+        try_emit(mf);
+    }
     return true;  // empty list is valid, not an error
 }
