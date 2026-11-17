@@ -24,9 +24,11 @@
 #include <freertos/task.h>
 #include <esp_netif.h>
 #include <esp_wifi.h>
+#include "ota.h"
 #include <esp_netif_sntp.h>
 #include <esp_netif.h>
 #include <esp_wifi.h>
+#include "ota.h"
 #include <cstring>
 #include <nvs_flash.h>
 #include <lvgl.h>
@@ -48,35 +50,27 @@ static void MediaSelfTestTask(void* arg);
 // HTTPS certificate validation needs a sane system clock; the stock firmware
 // only gets time from the OTA server response, so sync via SNTP once WiFi is
 // up. lwIP retries until the interface is ready.
+// SNTP gives UTC; the OTA server time carries the local timezone offset, so
+// re-apply it on every sync (otherwise the clock jumps back to UTC).
+static void SntpTimeSyncCb(struct timeval* tv) {
+    if (tv == nullptr) return;
+    int off = Ota::GlobalTimezoneOffsetSec();
+    if (off != 0) {
+        tv->tv_sec += off;
+    }
+    settimeofday(tv, nullptr);
+    ESP_LOGI(TAG, "SNTP time synced (tz offset %ds)", off);
+}
+
 static void SntpInitTask(void* arg) {
     (void)arg;
     vTaskDelay(pdMS_TO_TICKS(3000));
     esp_sntp_config_t opts = ESP_NETIF_SNTP_DEFAULT_CONFIG("pool.ntp.org");
-    opts.sync_cb = nullptr;
+    opts.sync_cb = SntpTimeSyncCb;
     esp_netif_sntp_init(&opts);
-    ESP_LOGI(TAG, "SNTP sync started (pool.ntp.org)");
-
-    // Pin public DNS servers on the STA interface: the DHCP-provided resolver
-    // intermittently fails (getaddrinfo error 202), which killed all HTTPS
-    // fetches. Retry until the interface is up.
-    esp_netif_t* sta = esp_netif_get_handle_from_ifkey("WIFI_STA_DEF");
-    if (sta != nullptr) {
-        for (int i = 0; i < 30; i++) {
-            esp_netif_dns_info_t dns;
-            memset(&dns, 0, sizeof(dns));
-            dns.ip.type = ESP_IPADDR_TYPE_V4;
-            dns.ip.u_addr.ip4.addr = esp_ip4addr_aton("8.8.8.8");
-            if (esp_netif_set_dns_info(sta, ESP_NETIF_DNS_MAIN, &dns) == ESP_OK) {
-                memset(&dns, 0, sizeof(dns));
-                dns.ip.type = ESP_IPADDR_TYPE_V4;
-                dns.ip.u_addr.ip4.addr = esp_ip4addr_aton("1.1.1.1");
-                esp_netif_set_dns_info(sta, ESP_NETIF_DNS_BACKUP, &dns);
-                ESP_LOGI(TAG, "DNS pinned to 8.8.8.8 / 1.1.1.1");
-                break;
-            }
-            vTaskDelay(pdMS_TO_TICKS(2000));
-        }
-    }
+    ESP_LOGI(TAG, "SNTP sync started (pool.ntp.org), tz from OTA server");
+    // NOTE: do not override DHCP DNS with 8.8.8.8 here - this network blocks
+    // external UDP/53, which made every lookup fail. Keep the router resolver.
     vTaskDelete(nullptr);
 }
 

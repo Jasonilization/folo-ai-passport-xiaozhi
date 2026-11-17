@@ -22,6 +22,11 @@ public:
     bool HasWebsocketConfig() { return has_websocket_config_; }
     bool HasActivationCode() { return has_activation_code_; }
     bool HasServerTime() { return has_server_time_; }
+    // Server-provided timezone offset in seconds (e.g. 28800 for UTC+8).
+    int TimezoneOffsetSec() const { return timezone_offset_sec_; }
+
+    // Process-wide accessor (Ota is owned by Application, not a singleton).
+    static int GlobalTimezoneOffsetSec();
     bool StartUpgrade(std::function<void(int progress, size_t speed)> callback);
     static bool Upgrade(const std::string& firmware_url, std::function<void(int progress, size_t speed)> callback);
     void MarkCurrentVersionValid();
@@ -40,6 +45,7 @@ private:
     bool has_mqtt_config_ = false;
     bool has_websocket_config_ = false;
     bool has_server_time_ = false;
+    int timezone_offset_sec_ = 0;
     bool has_activation_code_ = false;
     bool has_serial_number_ = false;
     bool has_activation_challenge_ = false;

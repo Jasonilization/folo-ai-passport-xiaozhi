@@ -24,6 +24,9 @@
 
 #define TAG "Ota"
 
+static int g_tz_offset_sec = 0;
+int Ota::GlobalTimezoneOffsetSec() { return g_tz_offset_sec; }
+
 
 Ota::Ota() {
 #ifdef ESP_EFUSE_BLOCK_USR_DATA
@@ -201,6 +204,8 @@ NetworkResult<> Ota::CheckVersion() {
             
             // 如果有时区偏移，计算本地时间
             if (cJSON_IsNumber(timezone_offset)) {
+                timezone_offset_sec_ = timezone_offset->valueint * 60;
+                g_tz_offset_sec = timezone_offset_sec_;
                 ts += (timezone_offset->valueint * 60 * 1000); // 转换分钟为毫秒
             }
             
