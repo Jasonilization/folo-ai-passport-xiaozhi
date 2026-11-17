@@ -28,12 +28,16 @@
 #include <cstring>
 #include <nvs_flash.h>
 #include <lvgl.h>
+#include <esp_console.h>
 #include <atomic>
 #include <vector>
 
 #define TAG "AiPassport"
 
 class AiPassportBoard;
+static AiPassportBoard* g_board_for_console = nullptr;
+static void StartMediaConsole();
+// Boot-time self test
 // Boot-time self test: exercises the exact media path the UI uses (archive.org
 // search, folder listing, HTTP streaming + decode of a real track, radio
 // directory) and logs it to the serial monitor. Defined after the class.
@@ -573,6 +577,8 @@ public:
         // Keep the function for manual runs via a serial console if needed.
         // xTaskCreate(MediaSelfTestTask, "media_selftest", 10240, this, 3, nullptr);
         xTaskCreate(SntpInitTask, "sntp_init", 3072, nullptr, 3, nullptr);
+        g_board_for_console = this;
+        StartMediaConsole();
         // Force dark theme + apply saved rotation once LVGL is up.
         LoadLandscape();
         Application::GetInstance().Schedule([this]() {
@@ -601,6 +607,25 @@ public:
 
     virtual Display* GetDisplay() override {
         return display_;
+    }
+
+    // Serial-console media test hooks (drives the real UI code paths).
+    void DebugMedia(const std::string& sub, const std::string& a, const std::string& b) {
+        Application::GetInstance().Schedule([this, sub, a, b]() {
+            if (media_ == nullptr) {
+                media_ = std::make_unique<MediaMode>(display_, GetAudioCodec());
+            }
+            if (sub == "search") {
+                media_->DebugSearch(a);
+            } else if (sub == "list") {
+                media_->DebugList(a);
+            } else if (sub == "play") {
+                media_->DebugPlay(a, b.empty() ? 6 : atoi(b.c_str()));
+            } else if (sub == "radio") {
+                media_->Open();
+                media_->DebugSearch("");  // placeholder no-op; radio via UI row
+            }
+        });
     }
 
     virtual Backlight* GetBacklight() override {
@@ -714,6 +739,43 @@ static void MediaSelfTestTask(void* arg) {
     ESP_LOGI("AiPassport", "self-test: done, free heap %u",
              (unsigned)esp_get_free_heap_size());
         vTaskDelete(nullptr);
+}
+
+// Serial console: "mt search <query>", "mt list <archive-id>", "mt play <url> [secs]"
+static int MediaTestCmd(int argc, char** argv) {
+    if (argc < 2) {
+        printf("usage: mt search <q> | mt list <id> | mt play <url> [secs]\n");
+        return 1;
+    }
+    std::string sub = argv[1];
+    std::string a = argc > 2 ? argv[2] : "";
+    std::string b = argc > 3 ? argv[3] : "";
+    if (g_board_for_console != nullptr) {
+        g_board_for_console->DebugMedia(sub, a, b);
+    }
+    return 0;
+}
+
+static void StartMediaConsole() {
+    esp_console_repl_config_t repl_config = ESP_CONSOLE_REPL_CONFIG_DEFAULT();
+    repl_config.prompt = "passport> ";
+    repl_config.max_cmdline_length = 256;
+    esp_console_dev_usb_serial_jtag_config_t hw_config =
+        ESP_CONSOLE_DEV_USB_SERIAL_JTAG_CONFIG_DEFAULT();
+    esp_console_repl_t* repl = nullptr;
+    if (esp_console_new_repl_usb_serial_jtag(&hw_config, &repl_config, &repl) != ESP_OK) {
+        return;
+    }
+    const esp_console_cmd_t cmd = {
+        .command = "mt",
+        .help = "media test: mt search <q> | mt list <id> | mt play <url> [secs]",
+        .hint = nullptr,
+        .func = MediaTestCmd,
+        .argtable = nullptr,
+    };
+    esp_console_cmd_register(&cmd);
+    esp_console_start_repl(repl);
+    ESP_LOGI(TAG, "serial console ready (try: mt search asgore)");
 }
 
 DECLARE_BOARD(AiPassportBoard);

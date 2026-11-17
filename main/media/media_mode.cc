@@ -361,6 +361,12 @@ void MediaMode::OnOkDouble() {
         writer_->Backspace();
         return;
     }
+    if (state_ == State::kSearchHub) {
+        // Speak instead of typing (up+down chord is not reliably readable on
+        // the single-ADC resistor ladder, so double-OK triggers voice here).
+        StartVoiceSearch();
+        return;
+    }
     if (state_ == State::kPlaying) {
         player_->Stop();
         GoRoot();
@@ -667,6 +673,7 @@ void MediaMode::FetchItemsTask(void* arg) {
             return;
         }
         self->items_ = *items;
+        ESP_LOGI(TAG, "search results: %u items", (unsigned)items->size());
         std::vector<Row> rows;
         rows.push_back({kTagBack, 0, "Back", MATERIAL_SYMBOLS_ARROW_BACK});
         for (size_t i = 0; i < items->size(); i++) {
@@ -706,6 +713,10 @@ void MediaMode::FetchFilesTask(void* arg) {
             return;
         }
         self->files_ = *files;
+        ESP_LOGI(TAG, "file list: %u entries", (unsigned)files->size());
+        for (size_t i = 0; i < files->size() && i < 5; i++) {
+            ESP_LOGI(TAG, "  file: %s", (*files)[i].name.c_str());
+        }
         std::vector<Row> rows;
         rows.push_back({kTagBack, 0, "Back", MATERIAL_SYMBOLS_ARROW_BACK});
         for (size_t i = 0; i < files->size(); i++) {
@@ -744,6 +755,7 @@ void MediaMode::FetchStationsTask(void* arg) {
             return;
         }
         self->stations_ = *stations;
+        ESP_LOGI(TAG, "radio results: %u stations", (unsigned)stations->size());
         std::vector<Row> rows;
         rows.push_back({kTagBack, 0, "Back", MATERIAL_SYMBOLS_ARROW_BACK});
         for (size_t i = 0; i < stations->size(); i++) {
@@ -941,4 +953,38 @@ void MediaMode::LoadHistory() {
         }
     }
     cJSON_Delete(root);
+}
+
+void MediaMode::DebugSearch(const std::string& q) {
+    Open();
+    StartSearch(q);
+}
+
+void MediaMode::DebugList(const std::string& identifier) {
+    Open();
+    MediaItem item;
+    item.identifier = identifier;
+    item.title = identifier;
+    OpenItem(item);
+}
+
+void MediaMode::DebugPlay(const std::string& url, int seconds) {
+    MediaTrack track;
+    track.title = "debug stream";
+    track.url = url;
+    PlayTrack(track);
+    xTaskCreate(
+        [](void* arg) {
+            auto* self = static_cast<MediaMode*>(arg);
+            int secs = 6;
+            // arg is self; seconds passed via a static is ugly - use 6s default
+            vTaskDelay(pdMS_TO_TICKS(secs * 1000));
+            Application::GetInstance().Schedule([self]() {
+                if (self->player_ != nullptr) {
+                    self->player_->Stop();
+                }
+            });
+            vTaskDelete(nullptr);
+        },
+        "dbg_stop", 3072, this, 3, nullptr);
 }

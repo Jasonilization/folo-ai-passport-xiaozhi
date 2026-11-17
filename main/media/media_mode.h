@@ -28,6 +28,11 @@ public:
     void Close();  // hide everything and stop playback
     bool IsOpen() const { return open_; }
 
+    // Serial-console test hooks (used to drive the player over USB serial).
+    void DebugSearch(const std::string& q);
+    void DebugList(const std::string& identifier);
+    void DebugPlay(const std::string& url, int seconds);
+
     // Button routing: the board forwards buttons here while media mode is open.
     void OnUp();
     void OnDown();
