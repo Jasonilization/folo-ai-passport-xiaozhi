@@ -102,7 +102,7 @@ void MusicPlayer::Play(const MediaTrack& track) {
         vTaskDelete(static_cast<TaskHandle_t>(task_));
         task_ = nullptr;
     }
-    if (xTaskCreate(TaskEntry, "music_player", 20480, this, 4,
+    if (xTaskCreate(TaskEntry, "music_player", 16384, this, 4,
                     reinterpret_cast<TaskHandle_t*>(&task_)) != pdPASS) {
         ESP_LOGE(TAG, "failed to start playback task");
         Emit(Event::kError, ESP_AUDIO_ERR_FAIL);
@@ -168,10 +168,10 @@ void MusicPlayer::RunImpl() {
     // Wait for the heap to recover (media mode drops MQTT asynchronously, so
     // free heap rises a moment after Play() is called). Need enough for the
     // TLS handshake (~25-30KB transient).
-    for (int i = 0; i < 6 && esp_get_free_heap_size() < 60000; i++) {
+    for (int i = 0; i < 10 && esp_get_free_heap_size() < 58000; i++) {
         vTaskDelay(pdMS_TO_TICKS(1000));
     }
-    if (esp_get_free_heap_size() < 60000) {
+    if (esp_get_free_heap_size() < 58000) {
         ESP_LOGW(TAG, "not enough heap for playback (%u), refusing",
                  (unsigned)esp_get_free_heap_size());
         Emit(Event::kError, ESP_AUDIO_ERR_MEM_LACK);
