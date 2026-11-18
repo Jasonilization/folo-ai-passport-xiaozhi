@@ -26,8 +26,8 @@
 
 namespace {
 
-constexpr size_t kInBufSize = 16 * 1024;
-constexpr uint32_t kOutBufSize = 8 * 1024;
+constexpr size_t kInBufSize = 12 * 1024;
+constexpr uint32_t kOutBufSize = 6 * 1024;
 
 esp_audio_type_t TypeFromUrl(const std::string& url) {
     std::string lower;
@@ -156,10 +156,10 @@ void MusicPlayer::RunImpl() {
     // Wait for the heap to recover (media mode drops MQTT asynchronously, so
     // free heap rises a moment after Play() is called). Need enough for the
     // TLS handshake (~25-30KB transient).
-    for (int i = 0; i < 6 && esp_get_free_heap_size() < 45000; i++) {
+    for (int i = 0; i < 6 && esp_get_free_heap_size() < 60000; i++) {
         vTaskDelay(pdMS_TO_TICKS(1000));
     }
-    if (esp_get_free_heap_size() < 45000) {
+    if (esp_get_free_heap_size() < 60000) {
         ESP_LOGW(TAG, "not enough heap for playback (%u), refusing",
                  (unsigned)esp_get_free_heap_size());
         Emit(Event::kError, ESP_AUDIO_ERR_MEM_LACK);
