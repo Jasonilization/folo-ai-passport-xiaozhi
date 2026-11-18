@@ -289,7 +289,7 @@ bool ArchiveClient::ListFilesImpl(const std::string& identifier, std::vector<Med
             // Direct CDN URL (https://<d1><dir>/<name>) avoids the flaky
             // archive.org redirect chain. Fall back to /download/ otherwise.
             if (!cdn_host.empty() && !item_dir.empty()) {
-                mf.url = "https://" + cdn_host + item_dir + "/" + UrlEncode(mf.name);
+                mf.url = "http://" + cdn_host + item_dir + "/" + UrlEncode(mf.name);
             } else {
                 mf.url = "https://archive.org/download/" + identifier + "/" + UrlEncode(mf.name);
             }
