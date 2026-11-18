@@ -110,9 +110,20 @@ void MusicPlayer::Play(const MediaTrack& track) {
         vTaskDelete(static_cast<TaskHandle_t>(task_));
         task_ = nullptr;
     }
-    if (xTaskCreate(TaskEntry, "music_player", 8192, this, 4,
-                    reinterpret_cast<TaskHandle_t*>(&task_)) != pdPASS) {
-        ESP_LOGE(TAG, "failed to start playback task");
+    // Task creation can fail while the heap is still low (MQTT drop is
+    // async); retry for a few seconds.
+    bool created = false;
+    for (int i = 0; i < 10 && !created; i++) {
+        if (xTaskCreate(TaskEntry, "music_player", 8192, this, 4,
+                        reinterpret_cast<TaskHandle_t*>(&task_)) == pdPASS) {
+            created = true;
+        } else {
+            vTaskDelay(pdMS_TO_TICKS(1000));
+        }
+    }
+    if (!created) {
+        ESP_LOGE(TAG, "failed to start playback task (heap=%u)",
+                 (unsigned)esp_get_free_heap_size());
         Emit(Event::kError, ESP_AUDIO_ERR_FAIL);
         return;
     }
