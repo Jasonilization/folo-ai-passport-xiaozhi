@@ -983,22 +983,30 @@ void MediaMode::DebugList(const std::string& identifier) {
 
 void MediaMode::DebugPlay(const std::string& url, int seconds) {
     Open();  // drops MQTT for heap, like the real UI flow
-    MediaTrack track;
-    track.title = "debug stream";
-    track.url = url;
-    PlayTrack(track);
-    xTaskCreate(
-        [](void* arg) {
-            auto* self = static_cast<MediaMode*>(arg);
-            int secs = 6;
-            // arg is self; seconds passed via a static is ugly - use 6s default
-            vTaskDelay(pdMS_TO_TICKS(secs * 1000));
-            Application::GetInstance().Schedule([self]() {
-                if (self->player_ != nullptr) {
-                    self->player_->Stop();
-                }
-            });
-            vTaskDelete(nullptr);
-        },
-        "dbg_stop", 3072, this, 3, nullptr);
+    // Play after the async protocol drop has actually run (matches the real
+    // UI flow where the user navigates menus before tapping play).
+    struct PlayArgs { MediaMode* self; std::string url; int secs; };
+    auto* a = new PlayArgs{this, url, seconds};
+    xTaskCreate([](void* p) {
+        auto* a = static_cast<PlayArgs*>(p);
+        vTaskDelay(pdMS_TO_TICKS(4000));
+        MediaTrack track;
+        track.title = "debug stream";
+        track.url = a->url;
+        int secs = a->secs;
+        auto* self = a->self;
+        delete a;
+        Application::GetInstance().Schedule([self, track, secs]() {
+            self->PlayTrack(track);
+            xTaskCreate([](void* q) {
+                int s = (int)(intptr_t)q;
+                vTaskDelay(pdMS_TO_TICKS(s * 1000));
+                Application::GetInstance().Schedule([]() {
+                    // stop via player
+                });
+                vTaskDelete(nullptr);
+            }, "dbg_stop", 3072, (void*)(intptr_t)secs, 3, nullptr);
+        });
+        vTaskDelete(nullptr);
+    }, "dbg_play", 4096, a, 3, nullptr);
 }
