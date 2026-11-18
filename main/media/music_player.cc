@@ -47,6 +47,8 @@ namespace {
 uint8_t g_in[kInBufSize];
 uint8_t g_out[kOutBufSize];
 xz_mp3dec_t g_mp3d;
+StaticTask_t g_player_tcb;
+StackType_t g_player_stack[8192 / sizeof(StackType_t)];
 }  // namespace
 
 esp_audio_type_t TypeFromUrl(const std::string& url) {
@@ -110,20 +112,12 @@ void MusicPlayer::Play(const MediaTrack& track) {
         vTaskDelete(static_cast<TaskHandle_t>(task_));
         task_ = nullptr;
     }
-    // Task creation can fail while the heap is still low (MQTT drop is
-    // async); retry for a few seconds.
-    bool created = false;
-    for (int i = 0; i < 10 && !created; i++) {
-        if (xTaskCreate(TaskEntry, "music_player", 8192, this, 4,
-                        reinterpret_cast<TaskHandle_t*>(&task_)) == pdPASS) {
-            created = true;
-        } else {
-            vTaskDelay(pdMS_TO_TICKS(1000));
-        }
-    }
-    if (!created) {
-        ESP_LOGE(TAG, "failed to start playback task (heap=%u)",
-                 (unsigned)esp_get_free_heap_size());
+    // Static task: the stack lives in DRAM globals, so task creation never
+    // fails on the fragmented C3 heap.
+    task_ = xTaskCreateStatic(TaskEntry, "music_player", 8192 / sizeof(StackType_t), this, 4,
+                              g_player_stack, &g_player_tcb);
+    if (task_ == nullptr) {
+        ESP_LOGE(TAG, "failed to start playback task");
         Emit(Event::kError, ESP_AUDIO_ERR_FAIL);
         return;
     }
