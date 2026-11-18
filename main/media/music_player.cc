@@ -150,22 +150,21 @@ void MusicPlayer::Run() {
 }
 
 void MusicPlayer::RunImpl() {
+    // A TLS handshake needs ~25KB+ on top of the stream buffers; check BEFORE
+    // allocating (the buffers are 24KB) and refuse cleanly if the heap can't
+    // cover both - below that the handshake corrupts lwIP/heap on the C3.
+    if (esp_get_free_heap_size() < 50000 + kInBufSize + kOutBufSize) {
+        ESP_LOGW(TAG, "not enough heap for playback (%u), refusing",
+                 (unsigned)esp_get_free_heap_size());
+        Emit(Event::kError, ESP_AUDIO_ERR_MEM_LACK);
+        return;
+    }
     // Allocate the stream buffers FIRST, while the heap is still full; doing
     // it after the TLS handshake (which eats ~30KB) makes malloc fail/hang.
     uint8_t* in = static_cast<uint8_t*>(malloc(kInBufSize));
     uint8_t* out = static_cast<uint8_t*>(malloc(kOutBufSize));
     if (in == nullptr || out == nullptr) {
         ESP_LOGW(TAG, "buffer alloc failed in=%p out=%p heap=%u", in, out,
-                 (unsigned)esp_get_free_heap_size());
-        free(in);
-        free(out);
-        Emit(Event::kError, ESP_AUDIO_ERR_MEM_LACK);
-        return;
-    }
-    // A TLS handshake needs ~25KB+ free; below that it corrupts lwIP/heap on
-    // the C3, so refuse cleanly instead of crashing the device.
-    if (esp_get_free_heap_size() < 45000) {
-        ESP_LOGW(TAG, "not enough heap for playback (%u), refusing",
                  (unsigned)esp_get_free_heap_size());
         free(in);
         free(out);
