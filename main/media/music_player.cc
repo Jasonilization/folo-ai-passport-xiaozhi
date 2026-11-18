@@ -102,7 +102,7 @@ void MusicPlayer::Play(const MediaTrack& track) {
         vTaskDelete(static_cast<TaskHandle_t>(task_));
         task_ = nullptr;
     }
-    if (xTaskCreate(TaskEntry, "music_player", 16384, this, 4,
+    if (xTaskCreate(TaskEntry, "music_player", 8192, this, 4,
                     reinterpret_cast<TaskHandle_t*>(&task_)) != pdPASS) {
         ESP_LOGE(TAG, "failed to start playback task");
         Emit(Event::kError, ESP_AUDIO_ERR_FAIL);
