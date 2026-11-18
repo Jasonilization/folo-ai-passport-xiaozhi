@@ -30,6 +30,14 @@ lv_color_t TagHue(int tag) {
         default: return lv_color_hex(0x90A4AE);  // back
     }
 }
+template <typename F>
+void SafeUi(F&& fn) {
+    try {
+        fn();
+    } catch (...) {
+        ESP_LOGW("MediaMode", "UI update threw (out of memory?)");
+    }
+}
 }  // namespace
 
 MediaMode::MediaMode(LcdDisplay* display, AudioCodec* codec)
@@ -222,6 +230,7 @@ void MediaMode::GoRoot() {
 }
 
 void MediaMode::RebuildRows(const std::vector<Row>& rows, const std::string& title) {
+    try {
     if (panel_ == nullptr) {
         return;
     }
@@ -272,6 +281,9 @@ void MediaMode::RebuildRows(const std::vector<Row>& rows, const std::string& tit
         row_objs_.push_back(r);
     }
     UpdateSelection();
+    } catch (...) {
+        ESP_LOGW(TAG, "RebuildRows threw (out of memory?)");
+    }
 }
 
 void MediaMode::UpdateSelection() {
