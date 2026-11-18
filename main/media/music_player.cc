@@ -154,25 +154,14 @@ void MusicPlayer::RunImpl() {
     // allocating (the buffers are 24KB) and refuse cleanly if the heap can't
     // cover both - below that the handshake corrupts lwIP/heap on the C3.
     // Wait for the heap to recover (media mode drops MQTT asynchronously, so
-    // free heap rises a moment after Play() is called).
-    for (int i = 0; i < 6 && esp_get_free_heap_size() < 50000; i++) {
+    // free heap rises a moment after Play() is called). Need enough for the
+    // TLS handshake (~25-30KB transient).
+    for (int i = 0; i < 6 && esp_get_free_heap_size() < 45000; i++) {
         vTaskDelay(pdMS_TO_TICKS(1000));
     }
-    if (esp_get_free_heap_size() < 50000) {  // buffers(24KB) + TLS headroom(~25KB)
+    if (esp_get_free_heap_size() < 45000) {
         ESP_LOGW(TAG, "not enough heap for playback (%u), refusing",
                  (unsigned)esp_get_free_heap_size());
-        Emit(Event::kError, ESP_AUDIO_ERR_MEM_LACK);
-        return;
-    }
-    // Allocate the stream buffers FIRST, while the heap is still full; doing
-    // it after the TLS handshake (which eats ~30KB) makes malloc fail/hang.
-    uint8_t* in = static_cast<uint8_t*>(malloc(kInBufSize));
-    uint8_t* out = static_cast<uint8_t*>(malloc(kOutBufSize));
-    if (in == nullptr || out == nullptr) {
-        ESP_LOGW(TAG, "buffer alloc failed in=%p out=%p heap=%u", in, out,
-                 (unsigned)esp_get_free_heap_size());
-        free(in);
-        free(out);
         Emit(Event::kError, ESP_AUDIO_ERR_MEM_LACK);
         return;
     }
@@ -296,8 +285,22 @@ void MusicPlayer::RunImpl() {
     }
 
     codec_->EnableOutput(true);
-    ESP_LOGI(TAG, "stage: output enabled");
+    ESP_LOGI(TAG, "stage: output enabled, heap=%u", (unsigned)esp_get_free_heap_size());
 
+    // Buffers are allocated after the TLS handshake: at that point ~38KB is
+    // free, which fits the 24KB of buffers. Allocating before the handshake
+    // starved the handshake itself (TLS alloc failure -0x3000).
+    uint8_t* in = static_cast<uint8_t*>(malloc(kInBufSize));
+    uint8_t* out = static_cast<uint8_t*>(malloc(kOutBufSize));
+    if (in == nullptr || out == nullptr) {
+        ESP_LOGW(TAG, "buffer alloc failed in=%p out=%p heap=%u", in, out,
+                 (unsigned)esp_get_free_heap_size());
+        free(in);
+        free(out);
+        Cleanup();
+        Emit(Event::kError, ESP_AUDIO_ERR_MEM_LACK);
+        return;
+    }
     size_t in_len = 0, in_pos = 0;
     bool eof = false;
     int64_t content_length = esp_http_client_get_content_length(client);
