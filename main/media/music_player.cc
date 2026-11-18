@@ -41,6 +41,14 @@ namespace {
 constexpr size_t kInBufSize = 8 * 1024;
 constexpr uint32_t kOutBufSize = 6 * 1024;
 
+namespace {
+// Play-time working set as statics (single player instance; avoids fragmented
+// heap allocation failures on the C3).
+uint8_t g_in[kInBufSize];
+uint8_t g_out[kOutBufSize];
+xz_mp3dec_t g_mp3d;
+}  // namespace
+
 esp_audio_type_t TypeFromUrl(const std::string& url) {
     std::string lower;
     for (char c : url) {
@@ -177,21 +185,11 @@ void MusicPlayer::RunImpl() {
         Emit(Event::kError, ESP_AUDIO_ERR_MEM_LACK);
         return;
     }
-    // Allocate stream buffers AND the decoder struct up front (plain HTTP
-    // now, so no TLS spike); ~31KB total.
-    uint8_t* in = static_cast<uint8_t*>(malloc(kInBufSize));
-    uint8_t* out = static_cast<uint8_t*>(malloc(kOutBufSize));
-    mp3d_ = malloc(sizeof(xz_mp3dec_t));  // ~17KB
-    if (in == nullptr || out == nullptr || mp3d_ == nullptr) {
-        ESP_LOGW(TAG, "alloc failed in=%p out=%p mp3d=%p heap=%u", in, out, mp3d_,
-                 (unsigned)esp_get_free_heap_size());
-        free(in);
-        free(out);
-        free(mp3d_);
-        mp3d_ = nullptr;
-        Emit(Event::kError, ESP_AUDIO_ERR_MEM_LACK);
-        return;
-    }
+    // Buffers and the decoder struct are file-scope statics: allocating them
+    // at play time fails on the fragmented C3 heap. (See g_in/g_out/g_mp3d.)
+    uint8_t* in = g_in;
+    uint8_t* out = g_out;
+    mp3d_ = &g_mp3d;
     if (codec_ == nullptr) {
         Emit(Event::kError, ESP_AUDIO_ERR_FAIL);
         return;
@@ -477,8 +475,7 @@ void MusicPlayer::RunImpl() {
         }
     }
 
-    free(in);
-    free(out);
+    // in/out are statics (g_in/g_out); nothing to free.
     bool was_stopped = stop_;
     Cleanup();
     if (was_stopped) {
@@ -490,10 +487,7 @@ void MusicPlayer::RunImpl() {
 
 void MusicPlayer::Cleanup() {
     CloseResampler();
-    if (mp3d_ != nullptr) {
-        free(mp3d_);
-        mp3d_ = nullptr;
-    }
+    mp3d_ = nullptr;  // points at static g_mp3d; nothing to free
     if (decoder_ != nullptr) {
         esp_audio_dec_close(decoder_);
         decoder_ = nullptr;
