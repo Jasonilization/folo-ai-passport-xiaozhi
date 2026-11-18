@@ -7,6 +7,7 @@
 #include <atomic>
 #include <cstdint>
 #include <functional>
+
 #include <string>
 
 // Streams a full-length track or a radio URL over HTTP, decodes it with the
@@ -68,6 +69,12 @@ private:
     void* http_ = nullptr;
     void* decoder_ = nullptr;
     void* resampler_ = nullptr;
+    // minimp3 state (MP3 path; esp_audio_dec's MP3 decoder needs more RAM
+    // than the C3 has free while streaming).
+    bool use_minimp3_ = false;
+    void* mp3d_ = nullptr;  // mp3dec_t* (minimp3), opaque here
+    int mini_rate_ = 44100;
+    int mini_channels_ = 2;
     int resampler_channels_ = 0;
     std::atomic<bool> saw_disconnect_{false};
 };

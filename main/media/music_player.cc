@@ -4,6 +4,7 @@
 
 #include <decoder/esp_audio_dec.h>
 #include <decoder/esp_audio_dec_default.h>
+#include "media/minimp3.h"  // declarations only; minimp3 symbols are already in libesp_audio_codec
 #include <esp_ae_rate_cvt.h>
 #include <esp_crt_bundle.h>
 #include <esp_heap_caps.h>
@@ -274,7 +275,21 @@ void MusicPlayer::RunImpl() {
     dec_cfg.cfg = nullptr;
     dec_cfg.cfg_sz = 0;
     ESP_LOGI(TAG, "stage: opening decoder type=%d", (int)type);
-    esp_audio_err_t derr = esp_audio_dec_open(&dec_cfg, &decoder_);
+    use_minimp3_ = (type == ESP_AUDIO_TYPE_MP3);
+    esp_audio_err_t derr = ESP_AUDIO_ERR_OK;
+    if (use_minimp3_) {
+        // minimp3: ~5KB RAM, the right MP3 decoder for the heap-starved C3
+        // (esp_audio_dec's MP3 decoder needs more than is free here).
+        mp3d_ = malloc(sizeof(mp3dec_t));
+        if (mp3d_ == nullptr) {
+            derr = ESP_AUDIO_ERR_MEM_LACK;
+        } else {
+            mp3dec_init(static_cast<mp3dec_t*>(mp3d_));
+            ESP_LOGI(TAG, "using minimp3 decoder");
+        }
+    } else {
+        derr = esp_audio_dec_open(&dec_cfg, &decoder_);
+    }
     ESP_LOGI(TAG, "stage: decoder open ret=%d handle=%p heap=%u", (int)derr, decoder_,
              (unsigned)esp_get_free_heap_size());
     if (derr != ESP_AUDIO_ERR_OK) {
@@ -358,15 +373,50 @@ void MusicPlayer::RunImpl() {
         frame.len = kOutBufSize;
         frame.decoded_size = 0;
 
-        esp_audio_err_t err = esp_audio_dec_process(decoder_, &raw, &frame);
+        esp_audio_err_t err = ESP_AUDIO_ERR_OK;
+        if (use_minimp3_) {
+            // minimp3: ~5KB RAM, the right MP3 decoder for the heap-starved C3.
+            // Returns samples-per-channel; info carries frame_bytes/hz/channels.
+            int16_t* pcm16 = reinterpret_cast<int16_t*>(out);
+            const unsigned char* cur = in + in_pos;
+            size_t left = in_len - in_pos;
+            raw.consumed = 0;
+            frame.decoded_size = 0;
+            err = ESP_AUDIO_ERR_DATA_LACK;
+            while (left > 0) {
+                mp3dec_frame_info_t info;
+                int per_ch = mp3dec_decode_frame(static_cast<mp3dec_t*>(mp3d_), cur,
+                                                (int)left, pcm16, &info);
+                raw.consumed += info.frame_bytes;
+                cur += info.frame_bytes;
+                left -= info.frame_bytes;
+                if (per_ch > 0) {
+                    int ch = info.channels ? info.channels : 1;
+                    frame.decoded_size = (uint32_t)per_ch * ch * 2;
+                    mini_rate_ = info.hz;
+                    mini_channels_ = ch;
+                    err = ESP_AUDIO_ERR_OK;
+                    break;
+                }
+                if (info.frame_bytes == 0) {
+                    break;  // needs more input
+                }
+            }
+        } else {
+            err = esp_audio_dec_process(decoder_, &raw, &frame);
+        }
         if (frame.decoded_size > 0 && total_read < 1) {
             ESP_LOGI(TAG, "stage: first decoded frame %u bytes", frame.decoded_size);
         }
         if (frame.decoded_size > 0) {
-            esp_audio_dec_info_t info = {};
-            if (esp_audio_dec_get_info(decoder_, &info) == ESP_AUDIO_ERR_OK) {
-                OutputPcm(out, frame.decoded_size, (int)info.sample_rate,
-                          info.channel ? info.channel : 1, info.bits_per_sample);
+            if (use_minimp3_) {
+                OutputPcm(out, frame.decoded_size, mini_rate_, mini_channels_, 16);
+            } else {
+                esp_audio_dec_info_t info = {};
+                if (esp_audio_dec_get_info(decoder_, &info) == ESP_AUDIO_ERR_OK) {
+                    OutputPcm(out, frame.decoded_size, (int)info.sample_rate,
+                              info.channel ? info.channel : 1, info.bits_per_sample);
+                }
             }
             if (!started) {
                 started = true;
@@ -433,6 +483,10 @@ void MusicPlayer::RunImpl() {
 
 void MusicPlayer::Cleanup() {
     CloseResampler();
+    if (mp3d_ != nullptr) {
+        free(mp3d_);
+        mp3d_ = nullptr;
+    }
     if (decoder_ != nullptr) {
         esp_audio_dec_close(decoder_);
         decoder_ = nullptr;
