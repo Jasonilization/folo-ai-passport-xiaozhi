@@ -177,15 +177,18 @@ void MusicPlayer::RunImpl() {
         Emit(Event::kError, ESP_AUDIO_ERR_MEM_LACK);
         return;
     }
-    // Allocate stream buffers up front (plain-HTTP now, so no TLS spike);
-    // the decoder struct (~17KB) comes after the connect.
+    // Allocate stream buffers AND the decoder struct up front (plain HTTP
+    // now, so no TLS spike); ~31KB total.
     uint8_t* in = static_cast<uint8_t*>(malloc(kInBufSize));
     uint8_t* out = static_cast<uint8_t*>(malloc(kOutBufSize));
-    if (in == nullptr || out == nullptr) {
-        ESP_LOGW(TAG, "buffer alloc failed in=%p out=%p heap=%u", in, out,
+    mp3d_ = malloc(sizeof(xz_mp3dec_t));  // ~17KB
+    if (in == nullptr || out == nullptr || mp3d_ == nullptr) {
+        ESP_LOGW(TAG, "alloc failed in=%p out=%p mp3d=%p heap=%u", in, out, mp3d_,
                  (unsigned)esp_get_free_heap_size());
         free(in);
         free(out);
+        free(mp3d_);
+        mp3d_ = nullptr;
         Emit(Event::kError, ESP_AUDIO_ERR_MEM_LACK);
         return;
     }
@@ -303,13 +306,8 @@ void MusicPlayer::RunImpl() {
     if (use_minimp3_) {
         // minimp3: ~5KB RAM, the right MP3 decoder for the heap-starved C3
         // (esp_audio_dec's MP3 decoder needs more than is free here).
-        mp3d_ = malloc(sizeof(xz_mp3dec_t));
-        if (mp3d_ == nullptr) {
-            derr = ESP_AUDIO_ERR_MEM_LACK;
-        } else {
-            xz_mp3dec_init(static_cast<xz_mp3dec_t*>(mp3d_));
-            ESP_LOGI(TAG, "using minimp3 decoder");
-        }
+        xz_mp3dec_init(static_cast<xz_mp3dec_t*>(mp3d_));
+        ESP_LOGI(TAG, "using minimp3 decoder");
     } else {
         derr = esp_audio_dec_open(&dec_cfg, &decoder_);
     }
