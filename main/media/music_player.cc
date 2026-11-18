@@ -38,7 +38,7 @@
 
 namespace {
 
-constexpr size_t kInBufSize = 12 * 1024;
+constexpr size_t kInBufSize = 8 * 1024;
 constexpr uint32_t kOutBufSize = 6 * 1024;
 
 esp_audio_type_t TypeFromUrl(const std::string& url) {
@@ -174,6 +174,18 @@ void MusicPlayer::RunImpl() {
     if (esp_get_free_heap_size() < 35000) {
         ESP_LOGW(TAG, "not enough heap for playback (%u), refusing",
                  (unsigned)esp_get_free_heap_size());
+        Emit(Event::kError, ESP_AUDIO_ERR_MEM_LACK);
+        return;
+    }
+    // Allocate stream buffers up front (plain-HTTP now, so no TLS spike);
+    // the decoder struct (~17KB) comes after the connect.
+    uint8_t* in = static_cast<uint8_t*>(malloc(kInBufSize));
+    uint8_t* out = static_cast<uint8_t*>(malloc(kOutBufSize));
+    if (in == nullptr || out == nullptr) {
+        ESP_LOGW(TAG, "buffer alloc failed in=%p out=%p heap=%u", in, out,
+                 (unsigned)esp_get_free_heap_size());
+        free(in);
+        free(out);
         Emit(Event::kError, ESP_AUDIO_ERR_MEM_LACK);
         return;
     }
@@ -313,20 +325,6 @@ void MusicPlayer::RunImpl() {
     codec_->EnableOutput(true);
     ESP_LOGI(TAG, "stage: output enabled, heap=%u", (unsigned)esp_get_free_heap_size());
 
-    // Buffers are allocated after the TLS handshake: at that point ~38KB is
-    // free, which fits the 24KB of buffers. Allocating before the handshake
-    // starved the handshake itself (TLS alloc failure -0x3000).
-    uint8_t* in = static_cast<uint8_t*>(malloc(kInBufSize));
-    uint8_t* out = static_cast<uint8_t*>(malloc(kOutBufSize));
-    if (in == nullptr || out == nullptr) {
-        ESP_LOGW(TAG, "buffer alloc failed in=%p out=%p heap=%u", in, out,
-                 (unsigned)esp_get_free_heap_size());
-        free(in);
-        free(out);
-        Cleanup();
-        Emit(Event::kError, ESP_AUDIO_ERR_MEM_LACK);
-        return;
-    }
     size_t in_len = 0, in_pos = 0;
     bool eof = false;
     int64_t content_length = esp_http_client_get_content_length(client);
