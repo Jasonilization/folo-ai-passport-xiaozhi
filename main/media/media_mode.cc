@@ -982,6 +982,7 @@ void MediaMode::DebugList(const std::string& identifier) {
 }
 
 void MediaMode::DebugPlay(const std::string& url, int seconds) {
+    Open();  // drops MQTT for heap, like the real UI flow
     MediaTrack track;
     track.title = "debug stream";
     track.url = url;

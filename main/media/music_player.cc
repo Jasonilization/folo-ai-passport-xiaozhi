@@ -153,7 +153,7 @@ void MusicPlayer::RunImpl() {
     // A TLS handshake needs ~25KB+ on top of the stream buffers; check BEFORE
     // allocating (the buffers are 24KB) and refuse cleanly if the heap can't
     // cover both - below that the handshake corrupts lwIP/heap on the C3.
-    if (esp_get_free_heap_size() < 50000 + kInBufSize + kOutBufSize) {
+    if (esp_get_free_heap_size() < 50000) {  // buffers(24KB) + TLS headroom(~25KB)
         ESP_LOGW(TAG, "not enough heap for playback (%u), refusing",
                  (unsigned)esp_get_free_heap_size());
         Emit(Event::kError, ESP_AUDIO_ERR_MEM_LACK);
