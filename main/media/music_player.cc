@@ -4,7 +4,18 @@
 
 #include <decoder/esp_audio_dec.h>
 #include <decoder/esp_audio_dec_default.h>
-#include "media/minimp3.h"  // declarations only; minimp3 symbols are already in libesp_audio_codec
+// Own minimp3 copy with renamed symbols: libesp_audio_codec bundles a
+// modified minimp3, so linking its globals risks struct-layout mismatch.
+#define MINIMP3_IMPLEMENTATION
+#define mp3dec_t xz_mp3dec_t
+#define mp3dec_frame_info_t xz_mp3dec_frame_info_t
+#define mp3dec_init xz_mp3dec_init
+#define mp3dec_decode_frame xz_mp3dec_decode_frame
+#include "media/minimp3.h"
+#undef mp3dec_t
+#undef mp3dec_frame_info_t
+#undef mp3dec_init
+#undef mp3dec_decode_frame
 #include <esp_ae_rate_cvt.h>
 #include <esp_crt_bundle.h>
 #include <esp_heap_caps.h>
@@ -280,11 +291,11 @@ void MusicPlayer::RunImpl() {
     if (use_minimp3_) {
         // minimp3: ~5KB RAM, the right MP3 decoder for the heap-starved C3
         // (esp_audio_dec's MP3 decoder needs more than is free here).
-        mp3d_ = malloc(sizeof(mp3dec_t));
+        mp3d_ = malloc(sizeof(xz_mp3dec_t));
         if (mp3d_ == nullptr) {
             derr = ESP_AUDIO_ERR_MEM_LACK;
         } else {
-            mp3dec_init(static_cast<mp3dec_t*>(mp3d_));
+            xz_mp3dec_init(static_cast<xz_mp3dec_t*>(mp3d_));
             ESP_LOGI(TAG, "using minimp3 decoder");
         }
     } else {
@@ -384,8 +395,8 @@ void MusicPlayer::RunImpl() {
             frame.decoded_size = 0;
             err = ESP_AUDIO_ERR_DATA_LACK;
             while (left > 0) {
-                mp3dec_frame_info_t info;
-                int per_ch = mp3dec_decode_frame(static_cast<mp3dec_t*>(mp3d_), cur,
+                xz_mp3dec_frame_info_t info;
+                int per_ch = xz_mp3dec_decode_frame(static_cast<xz_mp3dec_t*>(mp3d_), cur,
                                                 (int)left, pcm16, &info);
                 raw.consumed += info.frame_bytes;
                 cur += info.frame_bytes;
