@@ -615,28 +615,33 @@ public:
 
     // Serial-console media test hooks (drives the real UI code paths).
     void DebugMedia(const std::string& sub, const std::string& a, const std::string& b) {
-        Application::GetInstance().Schedule([this, sub, a, b]() {
-            if (media_ == nullptr) {
-                media_ = std::make_unique<MediaMode>(display_, GetAudioCodec());
-            }
-            // Free the audio channel's heap BEFORE fetching: schedule the
-            // close, then wait for it to run (it is itself scheduled on the
-            // main task, which is where this lambda runs).
-            Application::GetInstance().CloseAudioChannel();
+        // Run on a separate task: the delay must not block the main task,
+        // otherwise the ResetProtocol/CloseAudioChannel scheduled inside
+        // Open() never gets to run and the heap stays low.
+        struct Args { AiPassportBoard* self; std::string sub, a, b; };
+        auto* args = new Args{this, sub, a, b};
+        xTaskCreate([](void* p) {
+            auto* args = static_cast<Args*>(p);
             vTaskDelay(pdMS_TO_TICKS(3000));
-            ESP_LOGI(TAG, "mt %s: heap before fetch=%u", sub.c_str(),
-                     (unsigned)esp_get_free_heap_size());
-            if (sub == "search") {
-                media_->DebugSearch(a);
-            } else if (sub == "list") {
-                media_->DebugList(a);
-            } else if (sub == "play") {
-                media_->DebugPlay(a, b.empty() ? 6 : atoi(b.c_str()));
-            } else if (sub == "radio") {
-                media_->Open();
-                media_->DebugSearch("");  // placeholder no-op; radio via UI row
-            }
-        });
+            Application::GetInstance().Schedule([args]() {
+                auto* self = args->self;
+                std::string sub = args->sub, a = args->a, b = args->b;
+                delete args;
+                if (self->media_ == nullptr) {
+                    self->media_ = std::make_unique<MediaMode>(self->display_, self->GetAudioCodec());
+                }
+                ESP_LOGI(TAG, "mt %s: heap before fetch=%u", sub.c_str(),
+                         (unsigned)esp_get_free_heap_size());
+                if (sub == "search") {
+                    self->media_->DebugSearch(a);
+                } else if (sub == "list") {
+                    self->media_->DebugList(a);
+                } else if (sub == "play") {
+                    self->media_->DebugPlay(a, b.empty() ? 6 : atoi(b.c_str()));
+                }
+            });
+            vTaskDelete(nullptr);
+        }, "mt_dbg", 4096, args, 3, nullptr);
     }
 
     virtual Backlight* GetBacklight() override {
