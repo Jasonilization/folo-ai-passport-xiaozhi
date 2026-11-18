@@ -47,6 +47,8 @@ namespace {
 uint8_t g_in[kInBufSize];
 uint8_t g_out[kOutBufSize];
 xz_mp3dec_t g_mp3d;
+int16_t g_pcm_mono[1152 * 2];       // downmix target (max mp3 frame)
+int16_t g_pcm_out[1152 * 2 * 2];    // resampled output staging
 StaticTask_t g_player_tcb;
 StackType_t g_player_stack[8192 / sizeof(StackType_t)];
 }  // namespace
@@ -527,28 +529,31 @@ bool MusicPlayer::OutputPcm(const uint8_t* data, uint32_t bytes, int sample_rate
     }
     // The codec path copies into std::vectors; with exceptions enabled a failed
     // allocation is catchable, but still drop the frame if heap is very low.
-    if (esp_get_free_heap_size() < samples * 2 + 8192) {
+    if (esp_get_free_heap_size() < samples * 2 + 4096) {
         return false;
     }
     const int16_t* pcm = reinterpret_cast<const int16_t*>(data);
     int dest_rate = codec_->output_sample_rate();
     int dest_channels = codec_->output_channels();
 
-    // The Passport's ES8311 output is mono: downmix stereo first.
-    std::vector<int16_t> mono;
+    // The Passport's ES8311 output is mono: downmix stereo into a static
+    // buffer (no per-frame heap allocation).
     if (channels == 2 && dest_channels == 1) {
         uint32_t frames = samples / 2;
-        mono.resize(frames);
+        if (frames > 1152 * 2) return false;
         for (uint32_t i = 0; i < frames; i++) {
-            mono[i] = static_cast<int16_t>((pcm[2 * i] + pcm[2 * i + 1]) / 2);
+            g_pcm_mono[i] = static_cast<int16_t>((pcm[2 * i] + pcm[2 * i + 1]) / 2);
         }
-        pcm = mono.data();
+        pcm = g_pcm_mono;
         samples = frames;
         channels = 1;
     }
 
     if (sample_rate == dest_rate && channels == dest_channels) {
-        std::vector<int16_t> out(pcm, pcm + samples);
+        // Reuse a static staging buffer; OutputData copies synchronously.
+        if (samples > 1152 * 2 * 2) return false;
+        memcpy(g_pcm_out, pcm, samples * 2);
+        std::vector<int16_t> out(g_pcm_out, g_pcm_out + samples);
         codec_->OutputData(out);
         return true;
     }
@@ -571,9 +576,9 @@ bool MusicPlayer::OutputPcm(const uint8_t* data, uint32_t bytes, int sample_rate
         ESP_AE_ERR_OK) {
         return false;
     }
-    std::vector<int16_t> converted(max_out * channels);
+    if (max_out * channels > 1152 * 2 * 2) return false;
     esp_ae_sample_t in = (esp_ae_sample_t)pcm;
-    esp_ae_sample_t out_buf = (esp_ae_sample_t)converted.data();
+    esp_ae_sample_t out_buf = (esp_ae_sample_t)g_pcm_out;
     uint32_t out_frames = max_out;
     if (esp_ae_rate_cvt_process(static_cast<esp_ae_rate_cvt_handle_t>(resampler_), in, frames,
                                 out_buf, &out_frames) != ESP_AE_ERR_OK) {
@@ -582,8 +587,8 @@ bool MusicPlayer::OutputPcm(const uint8_t* data, uint32_t bytes, int sample_rate
     if (out_frames == 0) {
         return true;
     }
-    converted.resize(out_frames * channels);
-    codec_->OutputData(converted);
+    std::vector<int16_t> out(g_pcm_out, g_pcm_out + out_frames * channels);
+    codec_->OutputData(out);
     return true;
 }
 
