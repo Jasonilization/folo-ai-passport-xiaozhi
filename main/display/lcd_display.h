@@ -92,6 +92,8 @@ public:
 
     // Live microphone loudness (0..1) for the level meter
     virtual void SetMicLevel(float level) override;
+    // Raw panel blit for full-screen apps (Doom); caller holds the lock.
+    void DrawPixels(int x, int y, int w, int h, const uint16_t* rgb565) override;
     virtual void SetMicVisualizerEnabled(bool enabled) override;
 };
 

@@ -8,6 +8,13 @@ set(SOURCES "audio/audio_codec.cc"
             "media/music_player.cc"
             "media/text_writer.cc"
             "media/media_mode.cc"
+            "games/doom/esp32/doom_entry.cpp"
+            "games/doom/esp32/i_system_esp32.cpp"
+            "games/doom/esp32/i_video_esp32.c"
+            "games/doom/esp32/wad_pack.c"
+            "games/doom/esp32/i_sound_esp32.c"
+            "games/doom/esp32/doom_stubs.c"
+            "games/doom/miniz.c"
             "notify/notify_player.cc"
             "audio/codecs/no_audio_codec.cc"
             "audio/codecs/box_audio_codec.cc"
@@ -49,7 +56,20 @@ set(SOURCES "audio/audio_codec.cc"
             "main.cc"
             )
 
-set(INCLUDE_DIRS "." "display" "display/lvgl_display" "display/lvgl_display/jpg" "audio" "audio/demuxer" "protocols")
+file(GLOB DOOM_SOURCES
+    ${CMAKE_CURRENT_SOURCE_DIR}/games/doom/source/*.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/games/doom/source/*.cpp)
+# No network play on a 400KB-RAM device: drop the net client (it pulls in the
+# C++ protocol header) and the Wi-stuff master server browser.
+list(REMOVE_ITEM DOOM_SOURCES
+    ${CMAKE_CURRENT_SOURCE_DIR}/games/doom/source/d_client.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/games/doom/source/s_mix.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/games/doom/source/s_mix_ref.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/games/doom/source/i_audio.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/games/doom/source/i_system.c)
+list(APPEND SOURCES ${DOOM_SOURCES})
+
+set(INCLUDE_DIRS "." "display" "display/lvgl_display" "display/lvgl_display/jpg" "audio" "audio/demuxer" "protocols" "games/doom/include" "games/doom/esp32" "games/doom")
 
 # Add only the common hardware layer required by the FoloToy AI Passport board.
 list(APPEND SOURCES
@@ -308,7 +328,7 @@ if(CONFIG_BOARD_TYPE_ESP32_P4_FUNCTION_EV_BOARD)
     )
 endif()
 idf_component_register(SRCS ${SOURCES}
-                    EMBED_FILES ${LANG_SOUNDS} ${COMMON_SOUNDS}
+                    EMBED_FILES ${LANG_SOUNDS} ${COMMON_SOUNDS} "games/doom/doom1.wad.pack"
                     INCLUDE_DIRS ${INCLUDE_DIRS}
                     WHOLE_ARCHIVE
                     PRIV_REQUIRES
@@ -342,6 +362,11 @@ idf_component_register(SRCS ${SOURCES}
 # dialect; pin the baseline so main/ does not depend on it.
 if(NOT CMAKE_BUILD_EARLY_EXPANSION)
     target_compile_options(${COMPONENT_LIB} PRIVATE $<$<COMPILE_LANGUAGE:CXX>:-std=gnu++23>)
+endif()
+# The Doom engine is old C; don't let its warnings fail the -Werror build.
+if(NOT CMAKE_BUILD_EARLY_EXPANSION)
+    target_compile_options(${COMPONENT_LIB} PRIVATE
+        $<$<COMPILE_LANGUAGE:C>:-Wno-error -Wno-uninitialized -Wno-maybe-uninitialized -Wno-format -Wno-implicit-function-declaration>)
 endif()
 
 # Use target_compile_definitions to define the reported board identity

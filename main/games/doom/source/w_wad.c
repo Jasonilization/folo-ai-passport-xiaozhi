@@ -45,6 +45,14 @@
 #include <fcntl.h>
 #include "doomtype.h"
 #include "doom_iwad.h"
+// ESP32: WAD comes from the embedded packed file, not a memory blob.
+extern int wad_pack_init(void);
+extern int wad_pack_numlumps(void);
+extern void wad_pack_lump_info(int i, char* name8, uint32_t* osize);
+extern int wad_pack_read(int i, uint8_t* dest);
+#define WADP_SCRATCH_SLOTS 8
+static uint32_t s_scratch_size[WADP_SCRATCH_SLOTS];
+
 #include "w_wad.h"
 #include "lprintf.h"
 
@@ -97,10 +105,8 @@ void ExtractFileBase (const char *path, char *dest)
 // proff - changed using pointer to wadfile_info_t
 static void W_AddFile()
 {
-    const wadinfo_t* header = (const wadinfo_t*)&doom_iwad[0];
-
-    if (doom_iwad_len < sizeof(wadinfo_t) || strncmp(header->identification,"IWAD",4))
-        I_Error("W_AddFile: Wad file doesn't have IWAD id");
+    if (wad_pack_init() != 0)
+        I_Error("W_AddFile: packed WAD missing/corrupt");
 }
 
 //Return -1 if not found.
@@ -109,40 +115,26 @@ static void W_AddFile()
 
 static int PUREFUNC FindLumpByName(const char* name)
 {
-    const wadinfo_t* header = (const wadinfo_t*)&doom_iwad[0];
-    const filelump_t* fileinfo = (const filelump_t*)&doom_iwad[header->infotableofs];
-
     int_64_t nameint = 0;
     strncpy((char*)&nameint, name, 8);
 
-    for(int i = header->numlumps - 1; i >= 0; i--)
+    int num = wad_pack_numlumps();
+    for (int i = num - 1; i >= 0; i--)
     {
-        //This is a bit naughty with alignment.
-        //For x86 doesn't matter because unaligned loads
-        //are fine.
-        //On ARM, unaligned loads are not fine but since it
-        //doesn't have a 64bit load, the compiler will generate
-        //32 bit loads. These vars are 32 aligned.
-
-        int_64_t nameint2 = *(int_64_t*)fileinfo[i].name;
-
-        if(nameint == nameint2)
+        char n8[8];
+        wad_pack_lump_info(i, n8, NULL);
+        int_64_t nameint2 = 0;
+        memcpy(&nameint2, n8, 8);
+        if (nameint == nameint2)
             return i;
     }
 
     return -1;
 }
 
-static const filelump_t* PUREFUNC FindLumpByNum(int num)
+static void PUREFUNC FindLumpByNum(int num, char* name8, uint32_t* osize)
 {
-    const wadinfo_t* header = (const wadinfo_t*)&doom_iwad[0];
-
-    if(num < 0 || num >= header->numlumps)
-        return NULL;
-
-    const filelump_t* fileinfo = (const filelump_t*)&doom_iwad[header->infotableofs];
-
-    return &fileinfo[num];
+    wad_pack_lump_info(num, name8, osize);
 }
 
 //
@@ -184,14 +176,14 @@ int PUREFUNC W_GetNumForName(const char* name)     // killough -- const added
 
 const char* PUREFUNC W_GetNameForNum(int lump)
 {
-    const filelump_t* l = FindLumpByNum(lump);
-
-    if(l)
-    {
-        return l->name;
-    }
-
-    return NULL;
+    // Return a pointer to a static copy of the lump name.
+    static char s_name[9];
+    uint32_t osize = 0;
+    FindLumpByNum(lump, s_name, &osize);
+    s_name[8] = 0;
+    if (lump < 0 || lump >= wad_pack_numlumps())
+        return NULL;
+    return s_name;
 }
 
 
@@ -225,11 +217,12 @@ void W_Init(void)
 
 int PUREFUNC W_LumpLength(int lump)
 {
-    const filelump_t* l = FindLumpByNum(lump);
-
-    if(l)
+    uint32_t osize = 0;
+    char n8[8];
+    FindLumpByNum(lump, n8, &osize);
+    if (osize || lump >= 0)
     {
-        return l->size;
+        return (int)osize;
     }
 
     I_Error ("W_LumpLength: %d >= numlumps",lump);
@@ -237,16 +230,33 @@ int PUREFUNC W_LumpLength(int lump)
     return 0;
 }
 
+// Decompressed lump storage: a small set of static buffers; the LRU lives in
+// wad_pack.c, so W_GetLumpPtr returns a pointer into the pack cache.
 static const void* PUREFUNC W_GetLumpPtr(int lump)
 {
-    const filelump_t* l = FindLumpByNum(lump);
-
-    if(l)
-    {
-        return (const void*)&doom_iwad[l->filepos];
+    // wad_pack_read needs a destination; use the cache slot buffer directly by
+    // decoding into a temp then letting the cache own it. To keep it simple we
+    // decode into a per-call static round-robin buffer.
+    static uint8_t* s_scratch[WADP_SCRATCH_SLOTS];
+    static int s_scratch_idx = 0;
+    if (lump < 0 || lump >= wad_pack_numlumps())
+        return NULL;
+    uint32_t osize = 0;
+    char n8[8];
+    FindLumpByNum(lump, n8, &osize);
+    if (osize == 0)
+        return NULL;
+    int slot = s_scratch_idx++ % WADP_SCRATCH_SLOTS;
+    if (s_scratch[slot] == NULL || s_scratch_size[slot] < osize) {
+        free(s_scratch[slot]);
+        s_scratch[slot] = (uint8_t*)malloc(osize);
+        s_scratch_size[slot] = osize;
     }
-
-    return NULL;
+    if (s_scratch[slot] == NULL)
+        return NULL;
+    if (wad_pack_read(lump, s_scratch[slot]) < 0)
+        return NULL;
+    return s_scratch[slot];
 }
 
 const void* PUREFUNC W_CacheLumpNum(int lump)

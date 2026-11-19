@@ -6,6 +6,7 @@
 #include "media/archive_client.h"
 #include "media/radio_client.h"
 #include "media/music_player.h"
+#include "games/doom/esp32/doom_entry.h"
 #include "codecs/es8311_audio_codec.h"
 #include "application.h"
 #include "button.h"
@@ -183,7 +184,7 @@ private:
                 EnterWifiConfigMode();
                 break;
             case kMenuDoom:
-                ShowToast("Doom not installed yet");
+                DoomStart(display_);
                 break;
             case kMenuAbout: {
                 char info[96];
@@ -347,6 +348,7 @@ private:
         auto up = adc_button_[kAdcButtonUp];
         up->OnClick([this]() {
             Application::GetInstance().Schedule([this]() {
+                if (DoomIsRunning()) { DoomOnButton(0, 0); return; }
                 if (IsMediaOpen()) {
                     media_->OnUp();
                 } else if (IsMenuOpen()) {
@@ -360,6 +362,7 @@ private:
         });
         up->OnLongPress([this]() {
             Application::GetInstance().Schedule([this]() {
+                if (DoomIsRunning()) { DoomOnButton(0, 2); return; }
                 if (IsMediaOpen()) {
                     media_->OnUpHoldStart();
                     return;
@@ -389,6 +392,7 @@ private:
         auto down = adc_button_[kAdcButtonDown];
         down->OnClick([this]() {
             Application::GetInstance().Schedule([this]() {
+                if (DoomIsRunning()) { DoomOnButton(1, 0); return; }
                 if (IsMediaOpen()) {
                     media_->OnDown();
                 } else if (IsMenuOpen()) {
@@ -402,6 +406,7 @@ private:
         });
         down->OnLongPress([this]() {
             Application::GetInstance().Schedule([this]() {
+                if (DoomIsRunning()) { DoomOnButton(1, 2); return; }
                 if (IsMediaOpen()) {
                     media_->OnDownHoldStart();
                     return;
@@ -431,6 +436,7 @@ private:
         auto ok = adc_button_[kAdcButtonOk];
         ok->OnClick([this]() {
             Application::GetInstance().Schedule([this]() {
+                if (DoomIsRunning()) { DoomOnButton(2, 0); return; }
                 if (IsMediaOpen()) {
                     media_->OnOkClick();
                 } else if (IsMenuOpen()) {
@@ -442,6 +448,7 @@ private:
         });
         ok->OnDoubleClick([this]() {
             Application::GetInstance().Schedule([this]() {
+                if (DoomIsRunning()) { DoomOnButton(2, 1); return; }
                 if (IsMediaOpen()) {
                     media_->OnOkDouble();
                 } else {
@@ -451,6 +458,7 @@ private:
         });
         ok->OnLongPress([this]() {
             Application::GetInstance().Schedule([this]() {
+                if (DoomIsRunning()) { DoomOnButton(2, 2); return; }
                 if (IsMediaOpen()) {
                     media_->OnOkHold();
                 } else if (IsMenuOpen()) {

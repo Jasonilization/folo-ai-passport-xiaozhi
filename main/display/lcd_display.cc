@@ -1515,6 +1515,12 @@ void LcdDisplay::ScrollChatMessages(int scroll_step_y) {
     lv_obj_scroll_by(content_, 0, scroll_step_y, LV_ANIM_ON);
 }
 
+void LcdDisplay::DrawPixels(int x, int y, int w, int h, const uint16_t* rgb565) {
+    if (panel_ != nullptr) {
+        esp_lcd_panel_draw_bitmap(panel_, x, y, x + w, y + h, rgb565);
+    }
+}
+
 void LcdDisplay::SetMicLevel(float level) {
     // Called from the app's 25 Hz timer (not the LVGL task); only snapshot the
     // target here, the LVGL timer does the actual drawing.

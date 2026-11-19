@@ -69,6 +69,11 @@ public:
     virtual void ScrollChatMessages(int scroll_step_y) { (void)scroll_step_y; }
     // Live microphone loudness (0..1); no-op on displays without a visualizer.
     virtual void SetMicLevel(float level) { (void)level; }
+    // Raw RGB565 blit for full-screen apps (e.g. Doom); no-op on displays
+    // without a panel. Caller must hold the display lock.
+    virtual void DrawPixels(int x, int y, int w, int h, const uint16_t* rgb565) {
+        (void)x; (void)y; (void)w; (void)h; (void)rgb565;
+    }
     // Enable/disable the mic visualizer (menu toggle).
     virtual void SetMicVisualizerEnabled(bool enabled) { (void)enabled; }
     virtual bool InsertAnimDialog(const char* name, uint32_t duration_ms) {

@@ -247,7 +247,9 @@ void V_SetPalLump(int index)
     else if(index > GBAPAL_GAMMA_LEVELS-1)
         index = GBAPAL_GAMMA_LEVELS-1;
 
-    const unsigned short* gbapal = (const unsigned short*)W_CacheLumpName("GBAPAL");
+    // ESP32: palette is converted from PLAYPAL in i_video_esp32.c; GBAPAL
+    // (a GBA-format lump) does not exist in the shareware WAD.
+    const unsigned short* gbapal = (const unsigned short*)W_CacheLumpName("PLAYPAL");
 
     _g->pallete_lump = gbapal + index * GBAPAL_PALETTES * GBAPAL_COLOURS;
 }

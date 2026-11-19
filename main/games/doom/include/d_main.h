@@ -61,7 +61,13 @@ void D_DoAdvanceDemo (void);
 
 void D_PageTicker(void);
 void D_StartTitle(void);
+#ifdef __cplusplus
+extern "C" {
+#endif
 void D_DoomMain(void);
+#ifdef __cplusplus
+}
+#endif
 
 
 
