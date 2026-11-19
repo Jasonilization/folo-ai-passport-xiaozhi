@@ -926,6 +926,7 @@ void MediaMode::SaveHistory() {
 }
 
 void MediaMode::LoadHistory() {
+    try {
     nvs_handle_t h;
     if (nvs_open("media", NVS_READONLY, &h) != ESP_OK) {
         return;
@@ -978,6 +979,11 @@ void MediaMode::LoadHistory() {
         }
     }
     cJSON_Delete(root);
+    } catch (...) {
+        ESP_LOGW(TAG, "LoadHistory threw (out of memory?)");
+        history_.clear();
+        played_.clear();
+    }
 }
 
 void MediaMode::DebugSearch(const std::string& q) {
