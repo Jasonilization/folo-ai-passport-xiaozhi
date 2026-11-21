@@ -18,6 +18,8 @@
 
 extern "C" {
 void DoomPushKey(int keyd, bool down);
+void I_FreeVideoBuffers(void);   // i_video_esp32.c
+void wad_pack_shutdown(void);    // wad_pack.c
 }
 
 static TaskHandle_t s_task = nullptr;
@@ -25,6 +27,7 @@ static volatile bool s_running = false;
 static volatile bool s_stop_requested = false;
 static Display* s_display = nullptr;
 static LcdDisplay* s_lcd = nullptr;
+static uint16_t* s_frame = nullptr;  // 240x320 RGB565 DMA staging buffer
 
 // Button -> Doom key mapping (KEYD_* from doomdef.h).
 // up = forward, down = back, ok = fire, ok-double = use, ok-hold = menu(esc),
@@ -44,17 +47,16 @@ extern "C" void DoomDrawFrame(const uint8_t* indexed, const uint16_t* pal565, in
     if (s_lcd == nullptr) {
         return;
     }
-    static uint16_t* frame = nullptr;
-    if (frame == nullptr) {
-        frame = (uint16_t*)heap_caps_malloc(240 * 320 * 2, MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL);
+    if (s_frame == nullptr) {
+        s_frame = (uint16_t*)heap_caps_malloc(240 * 320 * 2, MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL);
     }
-    if (frame == nullptr) {
+    if (s_frame == nullptr) {
         return;
     }
     for (int y = 0; y < h; y++) {
         const uint8_t* src = indexed + y * w;
-        uint16_t* dst0 = frame + (y * 2) * 240;
-        uint16_t* dst1 = frame + (y * 2 + 1) * 240;
+        uint16_t* dst0 = s_frame + (y * 2) * 240;
+        uint16_t* dst1 = s_frame + (y * 2 + 1) * 240;
         for (int x = 0; x < w; x++) {
             uint16_t c = pal565[src[x]];
             dst0[x * 2] = c;
@@ -66,8 +68,21 @@ extern "C" void DoomDrawFrame(const uint8_t* indexed, const uint16_t* pal565, in
     // Hold the LVGL lock while we own the panel (DisplayLockGuard is public).
     {
         DisplayLockGuard lock(s_display);
-        s_lcd->DrawPixels(0, 0, 240, 320, frame);
+        s_lcd->DrawPixels(0, 0, 240, 320, s_frame);
     }
+}
+
+// Free every heap buffer Doom owns (called from the engine's I_Quit path).
+extern "C" void DoomShutdownCleanup(void) {
+    s_running = false;
+    s_stop_requested = true;
+    if (s_frame != nullptr) {
+        heap_caps_free(s_frame);
+        s_frame = nullptr;
+    }
+    I_FreeVideoBuffers();
+    wad_pack_shutdown();
+    ESP_LOGI(TAG, "doom buffers freed, heap=%u", (unsigned)esp_get_free_heap_size());
 }
 
 static void DoomTask(void*) {
@@ -75,6 +90,7 @@ static void DoomTask(void*) {
     // D_DoomMain never returns; it calls I_Error -> DoomFatalError on failure.
     D_DoomMain();
     s_running = false;
+    DoomShutdownCleanup();
     vTaskDelete(nullptr);
 }
 
@@ -88,11 +104,10 @@ void DoomStart(Display* display) {
     s_lcd = static_cast<LcdDisplay*>(display);  // the passport board uses LcdDisplay
     s_stop_requested = false;
     s_running = true;
-    // Static stack: heap is fragmented on the C3.
-    static StaticTask_t tcb;
-    static StackType_t stack[12288];
-    s_task = xTaskCreateStatic([](void* p) { DoomTask(p); }, "doom", 12288, nullptr, 3, stack, &tcb);
-    if (s_task == nullptr) {
+    // Heap-allocated stack: the C3 has no RAM to spare at boot while music/MQTT
+    // is idle, so the stack must only exist while Doom actually runs.
+    BaseType_t rc = xTaskCreate(DoomTask, "doom", 12288, nullptr, 3, &s_task);
+    if (rc != pdPASS) {
         s_running = false;
         ESP_LOGE(TAG, "failed to create doom task");
     }

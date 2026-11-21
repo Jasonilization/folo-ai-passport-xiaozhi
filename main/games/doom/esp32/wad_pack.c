@@ -18,7 +18,8 @@ typedef struct {
     uint32_t off, csize, osize;
 } pack_lump_t;
 
-static pack_lump_t s_dir[WADP_MAX_LUMPS];
+// Points directly into the flash-mapped pack (no RAM copy of 40KB).
+static const pack_lump_t* s_dir = NULL;
 static int s_numlumps = 0;
 static const uint8_t* s_blob = NULL;
 
@@ -46,14 +47,9 @@ int wad_pack_init(void) {
     }
     s_numlumps = (int)num;
     s_blob = p + dir_off;
-    const uint8_t* d = p + 12;
-    for (uint32_t i = 0; i < num; i++) {
-        memcpy(s_dir[i].name, d, 8);
-        memcpy(&s_dir[i].off, d + 8, 4);
-        memcpy(&s_dir[i].csize, d + 12, 4);
-        memcpy(&s_dir[i].osize, d + 16, 4);
-        d += 24;
-    }
+    // The on-flash directory layout matches pack_lump_t exactly, so we can
+    // point at it instead of copying it into RAM.
+    s_dir = (const pack_lump_t*)(p + 12);
     for (int i = 0; i < WADP_CACHE_SLOTS; i++) {
         s_cache[i].lump = -1;
         s_cache[i].data = NULL;
@@ -62,6 +58,18 @@ int wad_pack_init(void) {
 }
 
 int wad_pack_numlumps(void) { return s_numlumps; }
+
+void wad_pack_shutdown(void) {
+    for (int i = 0; i < WADP_CACHE_SLOTS; i++) {
+        if (s_cache[i].data != NULL) {
+            free(s_cache[i].data);
+            s_cache[i].data = NULL;
+        }
+        s_cache[i].lump = -1;
+    }
+    s_dir = NULL;
+    s_numlumps = 0;
+}
 
 // Copy lump metadata (name/size) for index i.
 void wad_pack_lump_info(int i, char* name8, uint32_t* osize) {

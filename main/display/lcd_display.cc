@@ -1425,6 +1425,30 @@ void LcdDisplay::UpdateMood(const char* mood) {
         return;
     }
 
+    // Expressive eyes take over the mood face when enabled (lazy NVS read).
+    if (eyes_enabled_ || eyes_read_nvs_ == false) {
+        Settings settings("eyeface");
+        eyes_enabled_ = settings.GetBool("en", false);
+        eyes_read_nvs_ = true;
+    }
+    if (eyes_enabled_) {
+        DisplayLockGuard lock(this);
+        lv_obj_add_flag(emoji_label_, LV_OBJ_FLAG_HIDDEN);
+        CreateEyes();
+        UpdateEyesKind(mood);
+        if (mood_timer_ != nullptr) {
+            lv_timer_pause(mood_timer_);
+        }
+        mood_period_ms_ = 0;
+        return;
+    } else {
+        lv_obj_remove_flag(emoji_label_, LV_OBJ_FLAG_HIDDEN);
+        DestroyEyes();
+        if (mood_timer_ != nullptr) {
+            lv_timer_resume(mood_timer_);
+        }
+    }
+
     auto lvgl_theme = static_cast<LvglTheme*>(current_theme_);
     if (lvgl_theme == nullptr || lvgl_theme->large_icon_font() == nullptr) {
         return;
@@ -1485,6 +1509,215 @@ void LcdDisplay::UpdateMood(const char* mood) {
         return;
     }
     mood_timer_ = lv_timer_create(MoodTimerCb, period_ms, this);
+}
+
+
+// ---------------------------------------------------------------------------
+// Expressive cylinder-eyes avatar.
+// Two capsule "cylinders" with pupils that blink, look around and react to the
+// current mood (thinking looks up, listening widens, speaking squints with the
+// mic level, sleepy closes). Replaces the single-glyph robot icon when enabled.
+// ---------------------------------------------------------------------------
+namespace {
+constexpr lv_coord_t kEyeW = 56;    // capsule width
+constexpr lv_coord_t kEyeH = 78;    // capsule height (fully open)
+constexpr lv_coord_t kEyeGap = 30;  // gap between the two capsules
+constexpr lv_coord_t kPupilR = 15;  // pupil diameter
+constexpr int kEyeCadenceMs = 40;
+constexpr lv_color_t kEyeBody = LV_COLOR_MAKE(0xE6, 0xEC, 0xF2);   // capsule
+constexpr lv_color_t kEyeLine = LV_COLOR_MAKE(0x0E, 0x16, 0x24);   // outline
+constexpr lv_color_t kEyePupil = LV_COLOR_MAKE(0x14, 0x1E, 0x36);  // pupil
+constexpr lv_color_t kEyeAmber = LV_COLOR_MAKE(0xF5, 0xA6, 0x23);  // accent
+}  // namespace
+
+void LcdDisplay::SetEyesEnabled(bool enabled) {
+    eyes_enabled_ = enabled;
+    Settings settings("eyeface", true);
+    settings.SetBool("en", enabled);
+    ESP_LOGI(TAG, "cylinder eyes %s", enabled ? "on" : "off");
+}
+
+void LcdDisplay::CreateEyes() {
+    if (eyes_ready_ || emoji_label_ == nullptr) {
+        return;
+    }
+    lv_obj_t* parent = lv_obj_get_parent(emoji_label_);
+    eyes_cont_ = lv_obj_create(parent);
+    lv_obj_remove_style_all(eyes_cont_);
+    lv_obj_set_size(eyes_cont_, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
+    lv_obj_clear_flag(eyes_cont_, LV_OBJ_FLAG_SCROLLABLE);
+
+    auto make_eye = [this](lv_obj_t** eye, lv_obj_t** pupil, lv_obj_t** glint) {
+        *eye = lv_obj_create(eyes_cont_);
+        lv_obj_remove_style_all(*eye);
+        lv_obj_set_size(*eye, kEyeW, kEyeH);
+        lv_obj_set_style_radius(*eye, LV_RADIUS_CIRCLE, 0);
+        lv_obj_set_style_bg_color(*eye, kEyeBody, 0);
+        lv_obj_set_style_bg_opa(*eye, LV_OPA_COVER, 0);
+        lv_obj_set_style_border_width(*eye, 3, 0);
+        lv_obj_set_style_border_color(*eye, kEyeLine, 0);
+        lv_obj_clear_flag(*eye, LV_OBJ_FLAG_SCROLLABLE);
+
+        *pupil = lv_obj_create(*eye);
+        lv_obj_remove_style_all(*pupil);
+        lv_obj_set_size(*pupil, kPupilR, kPupilR);
+        lv_obj_set_style_radius(*pupil, LV_RADIUS_CIRCLE, 0);
+        lv_obj_set_style_bg_color(*pupil, kEyePupil, 0);
+        lv_obj_set_style_bg_opa(*pupil, LV_OPA_COVER, 0);
+        lv_obj_clear_flag(*pupil, LV_OBJ_FLAG_SCROLLABLE);
+
+        *glint = lv_obj_create(*eye);
+        lv_obj_remove_style_all(*glint);
+        lv_obj_set_size(*glint, 6, 6);
+        lv_obj_set_style_radius(*glint, LV_RADIUS_CIRCLE, 0);
+        lv_obj_set_style_bg_color(*glint, lv_color_white(), 0);
+        lv_obj_set_style_bg_opa(*glint, LV_OPA_80, 0);
+        lv_obj_clear_flag(*glint, LV_OBJ_FLAG_SCROLLABLE);
+    };
+    make_eye(&eye_l_, &pupil_l_, &glint_l_);
+    make_eye(&eye_r_, &pupil_r_, &glint_r_);
+    lv_obj_set_pos(eye_r_, kEyeW + kEyeGap, 0);
+    lv_obj_set_pos(eye_l_, 0, 0);
+
+    eyes_ready_ = true;
+    eyes_ticks_ = 0;
+    eyes_blink_ = 0;
+    eyes_gaze_timer_ = 0;
+    eyes_gaze_x_ = eyes_gaze_y_ = 0;
+    eyes_high_ = 0;
+    if (eyes_timer_ == nullptr) {
+        eyes_timer_ = lv_timer_create(EyesTimerCb, kEyeCadenceMs, this);
+    }
+    lv_timer_resume(eyes_timer_);
+}
+
+void LcdDisplay::DestroyEyes() {
+    if (eyes_timer_ != nullptr) {
+        lv_timer_pause(eyes_timer_);
+    }
+    if (eyes_cont_ != nullptr) {
+        lv_obj_del(eyes_cont_);
+        eyes_cont_ = nullptr;
+    }
+    eye_l_ = eye_r_ = pupil_l_ = pupil_r_ = glint_l_ = glint_r_ = nullptr;
+    eyes_ready_ = false;
+}
+
+void LcdDisplay::UpdateEyesKind(const char* mood) {
+    if (mood == nullptr) {
+        return;
+    }
+    int kind = 0;
+    if (strcmp(mood, "thinking") == 0) {
+        kind = 1;
+    } else if (strcmp(mood, "listening") == 0) {
+        kind = 2;
+    } else if (strcmp(mood, "speaking") == 0) {
+        kind = 3;
+    } else if (strcmp(mood, "sleepy") == 0) {
+        kind = 4;
+    }
+    eyes_kind_ = kind;
+    eyes_high_ = 0;
+    if (eyes_ready_ && eyes_cont_ != nullptr) {
+        // Amber ring while listening (the "paying attention" cue).
+        lv_obj_set_style_border_color(eye_l_, kind == 2 ? kEyeAmber : kEyeLine, 0);
+        lv_obj_set_style_border_color(eye_r_, kind == 2 ? kEyeAmber : kEyeLine, 0);
+    }
+}
+
+void LcdDisplay::DrawEyesFrame() {
+    if (!eyes_ready_ || eyes_cont_ == nullptr || eye_l_ == nullptr || eye_r_ == nullptr ||
+        emoji_label_ == nullptr) {
+        return;
+    }
+    eyes_ticks_++;
+
+    // Blink state machine: idle countdown -> close/open.
+    if (eyes_blink_ > 0) {
+        eyes_blink_--;
+    } else if (eyes_kind_ != 4) {
+        eyes_gaze_timer_++;
+        // Pseudo-random next blink (cheap LCG off the tick counter).
+        if (eyes_gaze_timer_ > 0 && (eyes_ticks_ % 97) == 0) {
+            eyes_blink_ = 9;
+        }
+    }
+
+    // Gaze drift towards the current target.
+    eyes_gaze_timer_++;
+    if ((eyes_gaze_timer_ % 34) == 1) {
+        uint32_t r = (uint32_t)(eyes_ticks_ * 2654435761u);
+        int span = eyes_kind_ == 1 ? 18 : 12;
+        eyes_gaze_tx_ = (int)(r % (2 * (uint32_t)span + 1)) - span;
+        eyes_gaze_ty_ = (int)((r >> 8) % (2 * (uint32_t)span + 1)) - span;
+        if (eyes_kind_ == 1) {  // thinking: look up
+            eyes_gaze_ty_ = -span / 2 - 4;
+        }
+    }
+    eyes_gaze_x_ += (eyes_gaze_tx_ - eyes_gaze_x_) / 3;
+    eyes_gaze_y_ += (eyes_gaze_ty_ - eyes_gaze_y_) / 3;
+
+    // Eye height: normal open, blink closes, sleepy half-closed, speaking
+    // squints with the mic level.
+    int height = kEyeH;
+    if (eyes_blink_ > 0) {
+        int phase = eyes_blink_;  // 9..1
+        int closed = (phase <= 3 || phase >= 8) ? 6 : 30;
+        height = closed;
+    } else if (eyes_kind_ == 4) {
+        height = 12;
+    } else if (eyes_kind_ == 3) {
+        int level = (int)(mic_level_shown_ * 26.0f);
+        height = kEyeH - level;
+    } else if (eyes_kind_ == 1) {
+        height = kEyeH - 6;
+    } else if (eyes_kind_ == 2) {
+        height = kEyeH + 2;
+    }
+    if (height < 6) {
+        height = 6;
+    }
+
+    // Pupil size: listening widens, speaking dilates with the mic.
+    int pupil = kPupilR;
+    if (eyes_kind_ == 2) {
+        pupil = kPupilR + 3;
+    } else if (eyes_kind_ == 3) {
+        pupil = kPupilR + (int)(mic_level_shown_ * 5.0f);
+    }
+
+    // Gaze clamp so the pupil stays inside the capsule.
+    int max_x = (kEyeW - pupil) / 2;
+    int max_y = (height - pupil) / 2;
+    if (max_x < 0) max_x = 0;
+    if (max_y < 0) max_y = 0;
+    int gx = eyes_gaze_x_ > max_x ? max_x : (eyes_gaze_x_ < -max_x ? -max_x : eyes_gaze_x_);
+    int gy = eyes_gaze_y_ > max_y ? max_y : (eyes_gaze_y_ < -max_y ? -max_y : eyes_gaze_y_);
+
+    lv_obj_set_size(eye_l_, kEyeW, height);
+    lv_obj_set_size(eye_r_, kEyeW, height);
+    for (lv_obj_t** eyes : {&eye_l_, &eye_r_}) {
+        lv_obj_t* eye = *eyes;
+        lv_obj_t* pupil_obj = (eye == eye_l_) ? pupil_l_ : pupil_r_;
+        lv_obj_t* glint = (eye == eye_l_) ? glint_l_ : glint_r_;
+        lv_obj_set_size(pupil_obj, pupil, pupil);
+        lv_obj_set_pos(pupil_obj, (kEyeW - pupil) / 2 + gx, (height - pupil) / 2 + gy);
+        lv_obj_set_pos(glint, (kEyeW - 6) / 2 + gx - 5, (height - 6) / 2 + gy - 6);
+        lv_obj_set_style_opa(glint, height > 24 ? LV_OPA_80 : LV_OPA_0, 0);
+    }
+
+    // Follow the glyph position (the mood icon moves between layouts).
+    lv_obj_align_to(eyes_cont_, emoji_label_, LV_ALIGN_CENTER, 0, 0);
+}
+
+void LcdDisplay::EyesTimerCb(lv_timer_t* timer) {
+    auto* self = static_cast<LcdDisplay*>(lv_timer_get_user_data(timer));
+    if (self == nullptr) {
+        return;
+    }
+    DisplayLockGuard lock(self);
+    self->DrawEyesFrame();
 }
 
 void LcdDisplay::MoodTimerCb(lv_timer_t* timer) {

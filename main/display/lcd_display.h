@@ -45,8 +45,35 @@ protected:
     int mood_phase_ = 0;
     lv_timer_t* mood_timer_ = nullptr;
 
-    void UpdateMood(const char* mood);
     static void MoodTimerCb(lv_timer_t* timer);
+
+    // Expressive cylinder-eyes avatar (replaces the glyph mood icon). Off by
+    // default; toggled with the "eyes" console command / NVS key "eyes".
+    bool eyes_enabled_ = false;   // user preference (survives reboot)
+    bool eyes_read_nvs_ = false;  // preference loaded yet
+    bool eyes_ready_ = false;     // objects created and visible
+    lv_obj_t* eyes_cont_ = nullptr;
+    lv_obj_t* eye_l_ = nullptr;
+    lv_obj_t* eye_r_ = nullptr;
+    lv_obj_t* pupil_l_ = nullptr;
+    lv_obj_t* pupil_r_ = nullptr;
+    lv_obj_t* glint_l_ = nullptr;
+    lv_obj_t* glint_r_ = nullptr;
+    lv_timer_t* eyes_timer_ = nullptr;
+    int eyes_kind_ = 0;           // 0 idle, 1 thinking, 2 listening, 3 speaking, 4 sleepy
+    int eyes_ticks_ = 0;
+    int eyes_blink_ = 0;          // >0: frames left in the blink animation
+    int eyes_gaze_timer_ = 0;
+    int eyes_gaze_x_ = 0;         // current gaze offset (px, -12..12)
+    int eyes_gaze_y_ = 0;
+    int eyes_gaze_tx_ = 0;        // gaze target
+    int eyes_gaze_ty_ = 0;
+    int eyes_high_ = 0;           // glint/pupil highlight phase
+    void CreateEyes();
+    void DestroyEyes();
+    void UpdateEyesKind(const char* mood);
+    void DrawEyesFrame();
+    static void EyesTimerCb(lv_timer_t* timer);
 
     // Microphone level meter: a small bar row at the bottom edge, driven by
     // the smoothed RMS from AudioService. Attack is fast, decay is slow.
@@ -92,6 +119,12 @@ public:
 
     // Live microphone loudness (0..1) for the level meter
     virtual void SetMicLevel(float level) override;
+    // Mood face: glyph icon or (when enabled) the animated cylinder eyes.
+    virtual void UpdateMood(const char* mood);
+
+    // Toggle the animated cylinder-eyes avatar (persisted in NVS).
+    void SetEyesEnabled(bool enabled);
+    bool EyesEnabled() const { return eyes_enabled_; }
     // Raw panel blit for full-screen apps (Doom); caller holds the lock.
     void DrawPixels(int x, int y, int w, int h, const uint16_t* rgb565) override;
     virtual void SetMicVisualizerEnabled(bool enabled) override;

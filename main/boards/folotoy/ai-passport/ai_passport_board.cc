@@ -790,6 +790,43 @@ static void StartMediaConsole() {
     if (esp_console_new_repl_usb_serial_jtag(&hw_config, &repl_config, &repl) != ESP_OK) {
         return;
     }
+    const esp_console_cmd_t eyes_cmd = {
+        .command = "eyes",
+        .help = "cylinder-eyes avatar on/off",
+        .hint = nullptr,
+        .func = [](int argc, char** argv) -> int {
+            if (g_board_for_console == nullptr || argc < 2) {
+                printf("usage: eyes on|off\n");
+                return 1;
+            }
+            bool en = strcmp(argv[1], "on") == 0;
+            Application::GetInstance().Schedule([en]() {
+                auto* lcd = static_cast<LcdDisplay*>(g_board_for_console->GetDisplay());
+                if (lcd != nullptr) {
+                    lcd->SetEyesEnabled(en);
+                    lcd->UpdateMood("neutral");
+                }
+            });
+            return 0;
+        },
+        .argtable = nullptr,
+    };
+    esp_console_cmd_register(&eyes_cmd);
+    const esp_console_cmd_t doom_cmd = {
+        .command = "doom",
+        .help = "start Doom",
+        .hint = nullptr,
+        .func = [](int argc, char** argv) -> int {
+            if (g_board_for_console != nullptr) {
+                Application::GetInstance().Schedule([]() {
+                    DoomStart(g_board_for_console->GetDisplay());
+                });
+            }
+            return 0;
+        },
+        .argtable = nullptr,
+    };
+    esp_console_cmd_register(&doom_cmd);
     const esp_console_cmd_t cmd = {
         .command = "mt",
         .help = "media test: mt search <q> | mt list <id> | mt play <url> [secs]",

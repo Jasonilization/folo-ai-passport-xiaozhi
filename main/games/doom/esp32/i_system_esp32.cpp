@@ -23,6 +23,7 @@ extern "C" {
 typedef enum { ev_keydown = 0, ev_keyup = 1 } evtype_t;
 typedef struct { evtype_t type; int data1, data2, data3; } event_t;
 void D_PostEvent(event_t* ev);
+void DoomShutdownCleanup(void);
 }
 typedef event_t event_t_;
 
@@ -53,7 +54,13 @@ void I_Error(const char* error, ...) {
     vTaskSuspend(nullptr);
     for (;;) { vTaskDelay(pdMS_TO_TICKS(1000)); }
 }
-void I_Quit(void) { DoomRequestStop(); }
+void I_Quit(void) {
+    // The engine calls this from its menu "quit" path. Free the buffers we own
+    // and end this task - D_DoomMain never returns after I_Quit.
+    DoomShutdownCleanup();
+    vTaskDelete(nullptr);
+    for (;;) { vTaskDelay(pdMS_TO_TICKS(1000)); }
+}
 bool I_StartDisplay(void) { return true; }
 void I_EndDisplay(void) {}
 const char* I_GetVersionString(void) { return "ESP32-C3 Doom"; }

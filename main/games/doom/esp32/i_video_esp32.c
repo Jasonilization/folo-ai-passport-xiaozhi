@@ -10,18 +10,40 @@
 #include "global_data.h"
 #include "w_wad.h"
 #include "lprintf.h"
+#include <esp_log.h>
 
 // Display handle injected by doom_entry.cpp
 extern void* g_doom_display;  // Display*
 // Draw into the LCD: implemented in doom_entry.cpp via the Display API.
 extern void DoomDrawFrame(const uint8_t* indexed, const uint16_t* pal565, int w, int h);
 
-static uint8_t s_backbuffer[SCREENWIDTH * SCREENHEIGHT];
-static uint16_t s_palette[256];
+// Allocated on the heap while Doom runs; the C3 has no RAM to spare at boot.
+static uint8_t* s_backbuffer = NULL;
+static uint16_t* s_palette = NULL;
+
+static int VideoAlloc(void) {
+    if (s_backbuffer == NULL) {
+        s_backbuffer = (uint8_t*)malloc(SCREENWIDTH * SCREENHEIGHT);
+    }
+    if (s_palette == NULL) {
+        s_palette = (uint16_t*)malloc(256 * sizeof(uint16_t));
+    }
+    return (s_backbuffer != NULL && s_palette != NULL) ? 0 : -1;
+}
+
+// Called when Doom exits (or fatally errors) to hand the RAM back.
+void I_FreeVideoBuffers(void) {
+    if (s_backbuffer) { free(s_backbuffer); s_backbuffer = NULL; }
+    if (s_palette) { free(s_palette); s_palette = NULL; }
+}
 
 void I_PreInitGraphics(void) {}
 
 void I_SetRes(void) {
+    if (VideoAlloc() != 0) {
+        I_Error("Doom: out of memory for %dx%d framebuffer", SCREENWIDTH, SCREENHEIGHT);
+        return;
+    }
     _g->screens[0].width = SCREENWIDTH;
     _g->screens[0].height = SCREENHEIGHT;
     _g->screens[0].data = ((unsigned short*)s_backbuffer);
@@ -29,7 +51,8 @@ void I_SetRes(void) {
 
 void I_InitGraphics(void) {
     I_SetRes();
-    lprintf("I_InitGraphics: %dx%d", SCREENWIDTH, SCREENHEIGHT);
+    ESP_LOGI("DoomVideo", "I_InitGraphics: %dx%d (heap=%u)", SCREENWIDTH, SCREENHEIGHT,
+             (unsigned)esp_get_free_heap_size());
 }
 
 void I_SetPalette(int pal) {
